@@ -1,4 +1,4 @@
-# Local dev: API + PostgreSQL + Redis
+# Local dev: API + PostgreSQL + Redis + Testing
 services:
   backend:
     build:
@@ -15,6 +15,27 @@ services:
     depends_on:
       - postgres
       - redis
+
+  # Test service for running tests in Docker
+  test:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    environment:
+      TEST_DATABASE_URL: postgresql+asyncpg://venturescope:venturescope@postgres:5432/venturescope_test
+      SECRET_KEY: test-secret-key-for-testing-only
+      ALGORITHM: HS256
+      ACCESS_TOKEN_EXPIRE_MINUTES: 1440
+      DEBUG: "true"
+    depends_on:
+      - postgres
+      - redis
+    volumes:
+      - .:/app
+      - ./htmlcov:/app/htmlcov  # For coverage reports
+    profiles:
+      - testing
+
   postgres:
     image: postgres:16-alpine
     environment:
@@ -25,6 +46,7 @@ services:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+
   redis:
     image: redis:7-alpine
     ports:
