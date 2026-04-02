@@ -54,6 +54,7 @@ nosetests.xml
 # Logs
 *.log
 logs/
+.coverage
 
 # IDE
 .vscode/
