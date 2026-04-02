@@ -26,6 +26,16 @@ pip install -r requirements.txt
 docker compose up -d postgres
 ```
 
+### Optional: start all services with Docker Compose
+
+```bash
+docker compose up --build -d
+```
+
+- API: http://localhost:8000  
+- PostgreSQL: localhost:5432  
+- Redis: localhost:6379
+
 ### 3. Create DB tables (no migrations yet)
 
 From project root (or `backend/`):

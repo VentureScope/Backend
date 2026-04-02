@@ -1,5 +1,20 @@
-# Local dev: PostgreSQL and Redis (for future Celery)
+# Local dev: API + PostgreSQL + Redis
 services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgresql+asyncpg://venturescope:venturescope@postgres:5432/venturescope
+      SECRET_KEY: change-me-in-production-use-openssl-rand-hex-32
+      ALGORITHM: HS256
+      ACCESS_TOKEN_EXPIRE_MINUTES: 1440
+      DEBUG: "false"
+    ports:
+      - "8000:8000"
+    depends_on:
+      - postgres
+      - redis
   postgres:
     image: postgres:16-alpine
     environment:
