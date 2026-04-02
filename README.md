@@ -72,6 +72,59 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
 Try: `POST /api/auth/register`, `POST /api/auth/login`, `GET /api/users/me` (with `Authorization: Bearer <token>`).
 
+## Testing
+
+The backend includes comprehensive test coverage with 32 unit tests covering all endpoints and services.
+
+### Quick Test Run
+
+```bash
+./run_tests.sh
+```
+
+### Test Options
+
+```bash
+# Run all tests
+./run_tests.sh
+
+# Run in Docker environment
+./run_tests.sh docker
+
+# Run with coverage report
+./run_tests.sh coverage
+
+# Run specific test categories
+./run_tests.sh unit        # Unit tests only
+./run_tests.sh integration # Integration tests only
+
+# Run tests manually with pytest
+pytest tests/ -v
+pytest tests/ --cov=app --cov-report=html
+```
+
+### Test Structure
+
+```
+tests/
+├── conftest.py           # Test fixtures and configuration
+├── test_auth.py         # Authentication endpoint tests
+├── test_users.py        # User management tests
+├── test_health.py       # Health check tests
+└── integration/         # Integration tests
+    ├── test_auth_integration.py
+    └── test_user_integration.py
+```
+
+### Test Requirements
+
+- All tests use pytest with pytest-asyncio for async support
+- Database testing uses SQLite in-memory for speed
+- Authentication tests cover JWT token generation and validation
+- Integration tests verify end-to-end workflows
+
+**Current Status**: ✅ 32/32 tests passing
+
 ## Implementation roadmap (from here)
 
 | Phase | What to add | Purpose |
@@ -97,9 +150,25 @@ backend/
 │   ├── schemas/      # Pydantic request/response
 │   ├── services/     # Business logic (AuthService, …)
 │   └── main.py
+├── docs/             # Detailed documentation
+│   ├── api/          # API documentation
+│   ├── testing/      # Testing guides and reports
+│   ├── deployment/   # Deployment and Docker guides
+│   └── architecture/ # System design documentation
+├── tests/            # Test suite (32 tests)
+│   ├── unit/         # Unit tests
+│   ├── integration/  # Integration tests
+│   └── e2e/          # End-to-end tests
 ├── requirements.txt
 ├── docker-compose.yml
 └── README.md
 ```
 
 Aligns with the doc: API → Service → Repository → DB.
+
+## Documentation
+
+- **[API Documentation](docs/api/endpoints.md)** - Detailed endpoint specifications
+- **[Testing Guide](docs/testing/strategy.md)** - Testing approach and execution
+- **[Docker Deployment](docs/deployment/docker.md)** - Container deployment guide
+- **[Full Documentation](docs/README.md)** - Complete documentation index
