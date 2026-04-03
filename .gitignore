@@ -80,6 +80,11 @@ Thumbs.db
 .mypy_cache/
 .ruff_cache/
 
+# Alembic
+alembic/__pycache__/
+alembic/versions/__pycache__/
+# Note: alembic/versions/ directory and .py files should be tracked
+
 # Local development
 *.local
 temp/

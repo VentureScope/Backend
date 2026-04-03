@@ -127,16 +127,16 @@ tests/
 
 ## Implementation roadmap (from here)
 
-| Phase | What to add | Purpose |
-|-------|-------------|--------|
-| **A** | Alembic migrations | Versioned schema changes |
-| **B** | Profile update, GitHub username | Complete User Management (FR1.2) |
-| **C** | OAuth (GitHub/Google) | Social login (doc) |
-| **D** | `JobListing` model + `/api/jobs` (CRUD + search) | Job market data (FR4) |
-| **E** | Job scrapers + Celery + Redis Beat | Weekly scraping (UC-08) |
-| **F** | PGVector + embeddings + SBERT | Semantic job matching (FR5.1) |
-| **G** | AI services (recommendations, RAG, CV) | LLM integration (FR5–FR7) |
-| **H** | B2B models + corporate endpoints | Corporate dashboard (FR8) |
+| Phase | What to add | Purpose | Status |
+|-------|-------------|---------|--------|
+| **A** | Alembic migrations | Versioned schema changes | ✅ **COMPLETED** |
+| **B** | Profile update, GitHub username | Complete User Management (FR1.2) | 🔄 Next |
+| **C** | OAuth (GitHub/Google) | Social login (doc) | ⏳ Pending |
+| **D** | `JobListing` model + `/api/jobs` (CRUD + search) | Job market data (FR4) | ⏳ Pending |
+| **E** | Job scrapers + Celery + Redis Beat | Weekly scraping (UC-08) | ⏳ Pending |
+| **F** | PGVector + embeddings + SBERT | Semantic job matching (FR5.1) | ⏳ Pending |
+| **G** | AI services (recommendations, RAG, CV) | LLM integration (FR5–FR7) | ⏳ Pending |
+| **H** | B2B models + corporate endpoints | Corporate dashboard (FR8) | ⏳ Pending |
 
 ## Folder structure
 
@@ -168,6 +168,7 @@ Aligns with the doc: API → Service → Repository → DB.
 
 ## Documentation
 
+- **[Database Migrations](docs/database/migrations.md)** - Alembic migration workflow and commands
 - **[API Documentation](docs/api/endpoints.md)** - Detailed endpoint specifications
 - **[Testing Guide](docs/testing/strategy.md)** - Testing approach and execution
 - **[Docker Deployment](docs/deployment/docker.md)** - Container deployment guide

@@ -94,5 +94,8 @@ When adding documentation:
 - [Test Commands](testing/commands.md) - How to run tests in Docker environment
 - [Testing Report](testing/TESTING_COMPLETE.md) - Comprehensive test suite implementation
 
+### Database
+- [Migrations Guide](database/migrations.md) - Alembic database migrations workflow and commands
+
 ### Troubleshooting
 - [Common Issues](troubleshooting/common-issues.md) - Solutions to common development and testing issues
