@@ -45,10 +45,14 @@ echo -e "${YELLOW}📊 Current Migration Status:${NC}"
 run_alembic "current" "Checking current migration version"
 echo ""
 
-# Show migration history (last 5)
-echo -e "${YELLOW}📜 Recent Migration History:${NC}"
-run_alembic "history --rev-range=-5:" "Showing migration history"
-echo ""
+# Show migration history (safely handle empty history)
+echo -e "${YELLOW}📜 Migration History:${NC}"
+if run_alembic "history" "Showing migration history"; then
+    echo ""
+else
+    echo -e "${YELLOW}📝 No migration history yet (this is normal for new setups)${NC}"
+    echo ""
+fi
 
 # Run migrations
 echo -e "${YELLOW}🚀 Running Migrations:${NC}"
