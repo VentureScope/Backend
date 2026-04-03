@@ -54,6 +54,27 @@ print('Tables created.')
 "
 ```
 
+or run
+```bash
+$ scripts/init_db.sh
+```
+Example ouput:
+
+>🗄️  VentureScope Database Initialization
+>========================================
+>🏠 Running locally
+>✓ Using Docker PostgreSQL
+>Tables created.
+>
+>✅ Database tables created successfully!
+>
+>Next steps:
+>  - Start the API: docker compose up backend
+>  - Or locally: uvicorn app.main:app --reload
+>  - Visit docs: http://localhost:8000/docs
+
+
+
 ### 4. Environment
 
 ```bash
