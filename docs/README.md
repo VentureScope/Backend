@@ -88,4 +88,11 @@ When adding documentation:
 ---
 
 **Current Documentation:**
+
+### Testing
+- [Testing Strategy](testing/strategy.md) - Testing approach, guidelines, and infrastructure
+- [Test Commands](testing/commands.md) - How to run tests in Docker environment
 - [Testing Report](testing/TESTING_COMPLETE.md) - Comprehensive test suite implementation
+
+### Troubleshooting
+- [Common Issues](troubleshooting/common-issues.md) - Solutions to common development and testing issues

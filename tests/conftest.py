@@ -29,29 +29,23 @@ async def engine():
     await engine.dispose()
 
 
-@pytest_asyncio.fixture(scope="function")
+@pytest_asyncio.fixture
 async def db_session(engine) -> AsyncGenerator[AsyncSession, None]:
     """Create a fresh database session for each test with proper transaction isolation."""
     # Create tables before each test
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
-    # Create a new connection for the test
-    async with engine.connect() as connection:
-        # Start a transaction
-        transaction = await connection.begin()
+    # Create session factory
+    async_session_factory = sessionmaker(
+        engine,
+        class_=AsyncSession,
+        expire_on_commit=False,
+    )
 
-        # Create session bound to this transaction
-        async_session = sessionmaker(
-            bind=connection,
-            class_=AsyncSession,
-            expire_on_commit=False,
-        )
-
-        async with async_session() as session:
-            yield session
-            # Rollback transaction after test
-            await transaction.rollback()
+    # Create and yield session
+    async with async_session_factory() as session:
+        yield session
 
     # Drop tables after each test to ensure clean state
     async with engine.begin() as conn:

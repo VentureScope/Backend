@@ -38,15 +38,39 @@ This document outlines the testing approach for the VentureScope Backend API.
 
 ### Docker Environment
 ```bash
-# Run tests in Docker container
-docker-compose --profile testing run --rm test pytest tests/ -v
+# Run tests in Docker container (recommended)
+docker run --rm --network backend_default \
+  -v "$(pwd)":/app \
+  -e TEST_DATABASE_URL=postgresql+asyncpg://venturescope:venturescope@postgres:5432/venturescope_test \
+  backend-test:latest \
+  pytest tests/unit/ tests/integration/ -v
 ```
+
+See [docs/testing/commands.md](./commands.md) for complete Docker test commands and setup instructions.
 
 ## Test Configuration
 
-- **pytest.ini**: Configures pytest behavior, markers, and asyncio settings
+- **pytest.ini**: Configures pytest behavior, markers, and asyncio settings (updated to modern `[pytest]` format)
 - **conftest.py**: Shared fixtures for database sessions, test client, and authentication
 - **Dockerfile.test**: Dedicated test container with all testing dependencies
+
+### Test Infrastructure Improvements (April 3, 2026)
+
+**Event Loop Management:**
+- Removed deprecated custom `event_loop` fixture to fix `RuntimeError: Task got Future attached to a different loop`
+- Now using pytest-asyncio's automatic event loop management (0.21.0+)
+- Each test function gets its own isolated event loop
+
+**Database Session Handling:**
+- Simplified `db_session` fixture to use `sessionmaker` directly
+- Removed complex nested transaction management that caused "Can't operate on closed transaction" errors
+- Let SQLAlchemy 2.0 handle transaction management automatically
+- Removed deprecated `autocommit` and `autoflush` parameters from sessionmaker
+
+**Dependency Compatibility:**
+- Pinned bcrypt to 4.0.1 to fix passlib compatibility issue
+- Updated datetime handling to use `datetime.now(timezone.utc)` instead of deprecated `datetime.utcnow()`
+- All deprecation warnings resolved for Python 3.12+ compatibility
 
 ## Testing Guidelines
 
@@ -86,4 +110,4 @@ Tests should run automatically on:
 - Integration tests should complete within 5 seconds
 
 ## Last Updated
-April 2, 2026 - Initial testing strategy documentation
+April 3, 2026 - Added test infrastructure improvements and Docker command updates
