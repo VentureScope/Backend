@@ -18,6 +18,8 @@ RUN_INTEGRATION=true
 RUN_E2E=false
 COVERAGE=true
 VERBOSE=false
+USE_DOCKER=false
+FORCE_LOCAL=false
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
@@ -54,6 +56,14 @@ while [[ $# -gt 0 ]]; do
             VERBOSE=true
             shift
             ;;
+        --docker)
+            USE_DOCKER=true
+            shift
+            ;;
+        --local)
+            FORCE_LOCAL=true
+            shift
+            ;;
         -h|--help)
             echo "Usage: $0 [options]"
             echo ""
@@ -64,6 +74,8 @@ while [[ $# -gt 0 ]]; do
             echo "  --all             Run all test types including e2e"
             echo "  --no-coverage     Skip coverage reporting"
             echo "  --verbose         Verbose output"
+            echo "  --docker          Force use of Docker for tests"
+            echo "  --local           Force local execution (requires pytest installed)"
             echo "  -h, --help        Show this help message"
             exit 0
             ;;
@@ -74,10 +86,82 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# Detect if we should use Docker for tests
+if [ "$FORCE_LOCAL" = false ]; then
+    # Check if pytest and required dependencies are available locally
+    if ! python3 -c "import pytest_asyncio, sqlalchemy, httpx" &> /dev/null; then
+        echo "⚠️  Required test dependencies not found locally, will use Docker for testing"
+        USE_DOCKER=true
+    fi
+fi
+
 # Check if we're in a Docker environment or need to set up test database
 if [ -n "$CI" ] || [ -n "$GITHUB_ACTIONS" ]; then
     echo "🐳 Running in CI environment"
     export TEST_DATABASE_URL="postgresql+asyncpg://postgres:postgres@localhost:5432/test_db"
+elif [ "$USE_DOCKER" = true ]; then
+    echo "🐳 Running tests in Docker container"
+    echo ""
+    
+    # Start database services
+    echo "Starting database services..."
+    docker compose up -d postgres redis
+    
+    # Wait for database to be ready
+    echo "⏳ Waiting for database..."
+    sleep 5
+    
+    # Create test database if it doesn't exist
+    docker compose exec -T postgres psql -U venturescope -d postgres -c "CREATE DATABASE venturescope_test;" 2>/dev/null || echo "Test database already exists"
+    
+    # Build test paths based on what we're running
+    TEST_PATHS=""
+    if [ "$RUN_UNIT" = true ]; then
+        TEST_PATHS="$TEST_PATHS tests/unit/"
+    fi
+    if [ "$RUN_INTEGRATION" = true ]; then
+        TEST_PATHS="$TEST_PATHS tests/integration/"
+    fi
+    if [ "$RUN_E2E" = true ]; then
+        TEST_PATHS="$TEST_PATHS tests/e2e/"
+    fi
+    
+    # Build pytest arguments
+    PYTEST_ARGS=""
+    if [ "$COVERAGE" = true ]; then
+        PYTEST_ARGS="--cov=app --cov-report=term-missing --cov-report=html"
+    fi
+    if [ "$VERBOSE" = true ]; then
+        PYTEST_ARGS="$PYTEST_ARGS -v"
+    fi
+    
+    # Run tests in Docker
+    echo ""
+    echo "Running tests..."
+    docker run --rm --network backend_default \
+        -v "$(pwd)":/app \
+        -e TEST_DATABASE_URL=postgresql+asyncpg://venturescope:venturescope@postgres:5432/venturescope_test \
+        backend-test:latest \
+        pytest $TEST_PATHS $PYTEST_ARGS
+    
+    EXIT_CODE=$?
+    
+    # Final summary
+    echo ""
+    echo "============================================"
+    if [ $EXIT_CODE -eq 0 ]; then
+        echo -e "${GREEN}🎉 All tests passed successfully!${NC}"
+        
+        if [ "$COVERAGE" = true ]; then
+            echo ""
+            echo "📊 Coverage report generated in htmlcov/"
+            echo "   Open htmlcov/index.html in your browser"
+        fi
+    else
+        echo -e "${RED}💥 Some tests failed (exit code: $EXIT_CODE)${NC}"
+    fi
+    echo "============================================"
+    exit $EXIT_CODE
 else
     echo "🏠 Running locally"
     # Check if Docker is available and start test database
