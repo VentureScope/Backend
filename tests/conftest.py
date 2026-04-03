@@ -21,37 +21,41 @@ TEST_DATABASE_URL = os.getenv(
 )
 
 
-@pytest.fixture(scope="session")
-def event_loop():
-    """Create an instance of the default event loop for the test session."""
-    loop = asyncio.get_event_loop_policy().new_event_loop()
-    yield loop
-    loop.close()
-
-
-@pytest_asyncio.fixture(scope="session")
+@pytest_asyncio.fixture(scope="function")
 async def engine():
-    """Create test database engine."""
-    engine = create_async_engine(TEST_DATABASE_URL)
+    """Create test database engine for each test."""
+    engine = create_async_engine(TEST_DATABASE_URL, echo=False)
     yield engine
     await engine.dispose()
 
 
-@pytest_asyncio.fixture
+@pytest_asyncio.fixture(scope="function")
 async def db_session(engine) -> AsyncGenerator[AsyncSession, None]:
-    """Create a fresh database session for each test."""
-    async with engine.begin() as connection:
-        await connection.run_sync(Base.metadata.create_all)
+    """Create a fresh database session for each test with proper transaction isolation."""
+    # Create tables before each test
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
 
+    # Create a new connection for the test
+    async with engine.connect() as connection:
+        # Start a transaction
+        transaction = await connection.begin()
+
+        # Create session bound to this transaction
         async_session = sessionmaker(
-            bind=connection, class_=AsyncSession, expire_on_commit=False
+            bind=connection,
+            class_=AsyncSession,
+            expire_on_commit=False,
         )
 
         async with async_session() as session:
             yield session
-            await session.rollback()
+            # Rollback transaction after test
+            await transaction.rollback()
 
-        await connection.run_sync(Base.metadata.drop_all)
+    # Drop tables after each test to ensure clean state
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
 
 
 @pytest_asyncio.fixture(scope="function")
