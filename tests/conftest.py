@@ -11,6 +11,8 @@ from faker import Faker
 from app.core.database import Base, get_db
 from app.main import app
 from app.core.config import settings
+from app.core.security import create_access_token, hash_password
+from app.models.user import User
 
 fake = Faker()
 
@@ -74,7 +76,7 @@ def user_data():
     """Generate fake user data for tests."""
     return {
         "email": fake.email(),
-        "password": "Test123!",
+        "password": "Test123!@#",
         "full_name": fake.name(),
         "career_interest": "Software Development",
         "role": "professional",
@@ -91,4 +93,104 @@ def mock_user():
         "career_interest": "Software Development",
         "role": "professional",
         "github_username": None,
+        "is_active": True,
+        "is_admin": False,
     }
+
+
+# ==================== Phase B: User Management Test Fixtures ====================
+
+
+@pytest_asyncio.fixture
+async def registered_user(client: AsyncClient, user_data: dict) -> dict:
+    """Register a user and return user data with id."""
+    response = await client.post("/api/auth/register", json=user_data)
+    assert response.status_code == 200
+    user_info = response.json()
+    user_info["password"] = user_data["password"]  # Include password for login tests
+    return user_info
+
+
+@pytest_asyncio.fixture
+async def authenticated_user(client: AsyncClient, registered_user: dict) -> dict:
+    """Register and login a user, return user data with token."""
+    login_data = {
+        "email": registered_user["email"],
+        "password": registered_user["password"],
+    }
+    response = await client.post("/api/auth/login", json=login_data)
+    assert response.status_code == 200
+    token_data = response.json()
+
+    return {
+        **registered_user,
+        "access_token": token_data["access_token"],
+        "headers": {"Authorization": f"Bearer {token_data['access_token']}"},
+    }
+
+
+@pytest_asyncio.fixture
+async def admin_user(db_session: AsyncSession) -> User:
+    """Create an admin user directly in the database."""
+    admin = User(
+        email="admin@venturescope.example.com",
+        password_hash=hash_password("AdminPass123!"),
+        full_name="Admin User",
+        role="professional",
+        is_active=True,
+        is_admin=True,
+    )
+    db_session.add(admin)
+    await db_session.commit()
+    await db_session.refresh(admin)
+    return admin
+
+
+@pytest_asyncio.fixture
+async def authenticated_admin(
+    client: AsyncClient, admin_user: User, db_session: AsyncSession
+) -> dict:
+    """Create and authenticate an admin user, return with token."""
+    # Ensure the admin user is committed and visible to the app
+    await db_session.commit()
+
+    # Login the admin user
+    login_data = {
+        "email": admin_user.email,
+        "password": "AdminPass123!",
+    }
+    response = await client.post("/api/auth/login", json=login_data)
+    assert response.status_code == 200, f"Admin login failed: {response.json()}"
+    token_data = response.json()
+
+    return {
+        "id": admin_user.id,
+        "email": admin_user.email,
+        "full_name": admin_user.full_name,
+        "is_admin": admin_user.is_admin,
+        "access_token": token_data["access_token"],
+        "headers": {"Authorization": f"Bearer {token_data['access_token']}"},
+    }
+
+
+@pytest_asyncio.fixture
+async def multiple_users(db_session: AsyncSession) -> list[User]:
+    """Create multiple test users for pagination testing."""
+    users = []
+    for i in range(15):  # Create 15 users for pagination testing
+        user = User(
+            email=f"user{i}@test.com",
+            password_hash=hash_password("Test123!"),
+            full_name=f"Test User {i}",
+            role="professional",
+            is_active=True,
+            is_admin=False,
+        )
+        db_session.add(user)
+        users.append(user)
+
+    await db_session.commit()
+    for user in users:
+        await db_session.refresh(user)
+
+    return users

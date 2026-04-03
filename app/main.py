@@ -1,10 +1,11 @@
 """
 VentureScope API – FastAPI application entry point.
 """
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import health, auth, users
+from app.api import health, auth, users, admin
 from app.core.config import settings
 
 app = FastAPI(
@@ -31,3 +32,4 @@ def root() -> dict:
 app.include_router(health.router, prefix="/api", tags=["health"])
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(users.router, prefix="/api/users", tags=["users"])
+app.include_router(admin.router, prefix="/api/admin", tags=["admin"])

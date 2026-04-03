@@ -1,7 +1,7 @@
 # API Documentation
 
 ## Overview
-VentureScope Backend provides a RESTful API for user authentication and career guidance features.
+VentureScope Backend provides a RESTful API for user authentication, user management, and career guidance features.
 
 ## Base URL
 - **Development**: `http://localhost:8000`
@@ -33,7 +33,7 @@ Authorization: Bearer <your-jwt-token>
   ```json
   {
     "email": "user@example.com",
-    "password": "securepassword",
+    "password": "securepassword123",
     "full_name": "John Doe",
     "career_interest": "Software Engineering",
     "role": "professional"
@@ -47,7 +47,9 @@ Authorization: Bearer <your-jwt-token>
     "full_name": "John Doe",
     "github_username": null,
     "career_interest": "Software Engineering",
-    "role": "professional"
+    "role": "professional",
+    "is_active": true,
+    "is_admin": false
   }
   ```
 
@@ -70,7 +72,7 @@ Authorization: Bearer <your-jwt-token>
   }
   ```
 
-### User Management
+### User Management (Self-Service)
 
 #### Get Current User
 - **GET** `/api/users/me`
@@ -84,9 +86,137 @@ Authorization: Bearer <your-jwt-token>
     "full_name": "John Doe",
     "github_username": null,
     "career_interest": "Software Engineering", 
-    "role": "professional"
+    "role": "professional",
+    "is_active": true,
+    "is_admin": false
   }
   ```
+
+#### Update Profile
+- **PATCH** `/api/users/me`
+- **Description**: Update current user's profile
+- **Authentication**: Required (Bearer token)
+- **Body** (all fields optional):
+  ```json
+  {
+    "full_name": "Jane Doe",
+    "github_username": "janedoe",
+    "career_interest": "Data Science"
+  }
+  ```
+- **Response**: Updated user object
+
+#### Change Password
+- **PUT** `/api/users/me/password`
+- **Description**: Change current user's password
+- **Authentication**: Required (Bearer token)
+- **Body**:
+  ```json
+  {
+    "current_password": "oldpassword123",
+    "new_password": "newpassword456"
+  }
+  ```
+- **Response**:
+  ```json
+  {
+    "message": "Password changed successfully",
+    "detail": "Please use your new password for future logins"
+  }
+  ```
+
+#### Delete Account
+- **DELETE** `/api/users/me`
+- **Description**: Delete current user's account (soft delete - deactivates account)
+- **Authentication**: Required (Bearer token)
+- **Body**:
+  ```json
+  {
+    "password": "yourpassword"
+  }
+  ```
+- **Response**:
+  ```json
+  {
+    "message": "Account deleted successfully",
+    "detail": "Your account has been deactivated. Contact support to restore."
+  }
+  ```
+
+### Admin Endpoints
+
+> **Note**: All admin endpoints require admin privileges (`is_admin: true`).
+
+#### List All Users
+- **GET** `/api/admin/users`
+- **Description**: List all users with pagination
+- **Authentication**: Required (Admin only)
+- **Query Parameters**:
+  - `page` (int, default: 1): Page number
+  - `per_page` (int, default: 10, max: 100): Items per page
+  - `include_inactive` (bool, default: false): Include deactivated users
+- **Response**:
+  ```json
+  {
+    "items": [
+      {
+        "id": "uuid",
+        "email": "user@example.com",
+        "full_name": "John Doe",
+        "role": "professional",
+        "is_active": true,
+        "is_admin": false
+      }
+    ],
+    "total": 100,
+    "page": 1,
+    "per_page": 10,
+    "pages": 10
+  }
+  ```
+
+#### Get User by ID
+- **GET** `/api/admin/users/{user_id}`
+- **Description**: Get any user by ID
+- **Authentication**: Required (Admin only)
+- **Response**: User object
+
+#### Update User
+- **PATCH** `/api/admin/users/{user_id}`
+- **Description**: Update any user's information
+- **Authentication**: Required (Admin only)
+- **Body** (all fields optional):
+  ```json
+  {
+    "full_name": "Updated Name",
+    "github_username": "newusername",
+    "career_interest": "Machine Learning",
+    "role": "student",
+    "is_active": true,
+    "is_admin": false
+  }
+  ```
+- **Response**: Updated user object
+
+#### Delete User
+- **DELETE** `/api/admin/users/{user_id}`
+- **Description**: Delete a user (soft delete by default)
+- **Authentication**: Required (Admin only)
+- **Query Parameters**:
+  - `hard_delete` (bool, default: false): Permanently delete user
+- **Response**:
+  ```json
+  {
+    "message": "User deactivated",
+    "detail": "User account has been deactivated"
+  }
+  ```
+
+#### Reactivate User
+- **POST** `/api/admin/users/{user_id}/reactivate`
+- **Description**: Reactivate a deactivated user
+- **Authentication**: Required (Admin only)
+- **Response**: Reactivated user object
 
 ## Error Responses
 
@@ -101,6 +231,7 @@ Authorization: Bearer <your-jwt-token>
 - **200**: Success
 - **400**: Bad Request - Invalid input data
 - **401**: Unauthorized - Missing or invalid token
+- **403**: Forbidden - Insufficient permissions (e.g., non-admin accessing admin endpoints)
 - **404**: Not Found - Resource doesn't exist
 - **422**: Validation Error - Request body validation failed
 - **500**: Internal Server Error
@@ -129,4 +260,4 @@ Currently no rate limiting implemented. Consider implementing for production.
 API is currently unversioned. Future versions should follow semantic versioning.
 
 ## Last Updated
-April 2, 2026 - Initial API documentation
+April 3, 2026 - Phase B: User Management CRUD Implementation

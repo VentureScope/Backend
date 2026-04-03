@@ -5,6 +5,10 @@ from app.models.user import User
 from app.repositories.user_repository import UserRepository
 from app.schemas.user import UserCreate, UserLogin
 
+# Dummy password hash for timing-attack prevention.
+# Used when user doesn't exist to ensure consistent response time.
+_DUMMY_HASH = hash_password("dummy-password-for-timing-consistency")
+
 
 class AuthService:
     def __init__(self, db: AsyncSession):
@@ -26,6 +30,13 @@ class AuthService:
 
     async def login(self, data: UserLogin) -> str:
         user = await self.repo.get_by_email(data.email)
-        if not user or not verify_password(data.password, user.password_hash):
+
+        # Always perform password verification to prevent timing attacks.
+        # Use a dummy hash when user doesn't exist to maintain consistent timing.
+        password_hash = user.password_hash if user else _DUMMY_HASH
+        password_valid = verify_password(data.password, password_hash)
+
+        if not user or not password_valid or not user.is_active:
             raise ValueError("Invalid email or password")
+
         return create_access_token(subject=user.id)

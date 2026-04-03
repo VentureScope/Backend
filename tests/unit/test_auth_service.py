@@ -123,7 +123,10 @@ class TestAuthService:
         login_data = UserLogin(email="test@example.com", password="Test123!")
 
         user = User(
-            id="user-id", email=login_data.email, password_hash="hashed_password"
+            id="user-id",
+            email=login_data.email,
+            password_hash="hashed_password",
+            is_active=True,
         )
         self.auth_service.repo.get_by_email.return_value = user
 
@@ -162,7 +165,10 @@ class TestAuthService:
         login_data = UserLogin(email="test@example.com", password="WrongPassword")
 
         user = User(
-            id="user-id", email=login_data.email, password_hash="hashed_password"
+            id="user-id",
+            email=login_data.email,
+            password_hash="hashed_password",
+            is_active=True,
         )
         self.auth_service.repo.get_by_email.return_value = user
 
@@ -180,7 +186,12 @@ class TestAuthService:
         login_data = UserLogin(email="test@example.com", password="Test123!")
 
         user_id = "specific-user-id-123"
-        user = User(id=user_id, email=login_data.email, password_hash="hashed_password")
+        user = User(
+            id=user_id,
+            email=login_data.email,
+            password_hash="hashed_password",
+            is_active=True,
+        )
         self.auth_service.repo.get_by_email.return_value = user
 
         # Act

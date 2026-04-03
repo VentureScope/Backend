@@ -1,6 +1,7 @@
 """
 Async PostgreSQL session and engine. Repository layer uses this.
 """
+
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
@@ -26,6 +27,12 @@ class Base(DeclarativeBase):
 
 
 async def get_db() -> AsyncSession:
+    """
+    Dependency that provides an async database session.
+
+    Successful requests are automatically committed after the caller
+    finishes using the session. Rollback is automatic on exceptions.
+    """
     async with AsyncSessionLocal() as session:
         try:
             yield session
