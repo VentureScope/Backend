@@ -3,10 +3,30 @@ Application configuration via environment variables.
 """
 
 import json
+import os
 from typing import Any, List, Union
 from pydantic_settings import BaseSettings
 from pydantic import Field, field_validator
 from functools import lru_cache
+
+
+def load_env_file():
+    """Manually load .env file if pydantic-settings doesn't work properly."""
+    env_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(__file__))), ".env"
+    )
+    if os.path.exists(env_path):
+        with open(env_path, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    key, value = line.split("=", 1)
+                    if key not in os.environ:  # Don't override existing env vars
+                        os.environ[key] = value
+
+
+# Load .env file manually if needed
+load_env_file()
 
 
 class Settings(BaseSettings):
@@ -25,6 +45,19 @@ class Settings(BaseSettings):
 
     # Token cleanup settings
     TOKEN_CLEANUP_INTERVAL_SECONDS: int = 3600  # 1 hour default
+
+    # OAuth Configuration
+    # Google OAuth 2.0 settings
+    GOOGLE_CLIENT_ID: str = ""
+    GOOGLE_CLIENT_SECRET: str = ""
+    GOOGLE_REDIRECT_URI: str = "http://localhost:8000/api/auth/oauth/google/callback"
+
+    # OAuth state management (for CSRF protection)
+    OAUTH_STATE_SECRET: str = ""  # Should be different from JWT SECRET_KEY
+    OAUTH_STATE_EXPIRE_MINUTES: int = 10  # Short expiration for security
+
+    # OAuth scope configuration
+    GOOGLE_OAUTH_SCOPES: List[str] = ["openid", "email", "profile"]
 
     # Environment setting
     ENVIRONMENT: str = "development"  # development, staging, production

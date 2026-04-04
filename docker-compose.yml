@@ -1,18 +1,17 @@
 # Local dev: API + PostgreSQL + Redis + Testing
+# Uses .env file for configuration - DO NOT hardcode secrets here!
+
 services:
   backend:
     build:
       context: .
       dockerfile: Dockerfile
+    env_file:
+      - .env  # Load all variables from .env file
     environment:
+      # Override specific variables for Docker networking
       DATABASE_URL: postgresql+asyncpg://venturescope:venturescope@postgres:5432/venturescope
-      SECRET_KEY: change-me-in-production-use-openssl-rand-hex-32
-      ALGORITHM: HS256
-      ACCESS_TOKEN_EXPIRE_MINUTES: 1440
-      DEBUG: "false"
-      ENVIRONMENT: "development"
-      CORS_ORIGINS: "*"
-      FRONTEND_URL: "http://localhost:3000"
+      # All other variables come from .env file
     ports:
       - "8000:8000"
     depends_on:
@@ -20,6 +19,11 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
+    volumes:
+      # Mount source code for development (optional)
+      - ./app:/app/app
+      - ./alembic:/app/alembic
+      - ./alembic.ini:/app/alembic.ini
     # Run migrations before starting the API server
     command: >
       sh -c "
@@ -36,11 +40,13 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    env_file:
+      - .env  # Load base configuration
     environment:
+      # Override for testing
       TEST_DATABASE_URL: postgresql+asyncpg://venturescope:venturescope@postgres:5432/venturescope_test
+      DATABASE_URL: postgresql+asyncpg://venturescope:venturescope@postgres:5432/venturescope_test
       SECRET_KEY: test-secret-key-for-testing-only
-      ALGORITHM: HS256
-      ACCESS_TOKEN_EXPIRE_MINUTES: 1440
       DEBUG: "true"
     depends_on:
       postgres:

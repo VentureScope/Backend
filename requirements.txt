@@ -16,6 +16,10 @@ pydantic==2.10.2
 email-validator>=2.0.0
 pydantic-settings==2.6.1
 
+# OAuth 2.0
+authlib==1.3.2
+httpx==0.28.1  # Already included for testing, also used for OAuth
+
 # Utils
 python-dotenv==1.0.1
 

@@ -1,13 +1,20 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.security import decode_access_token_with_details, TokenError
 from app.schemas.user import UserCreate, UserLogin, UserResponse, Token
+from app.schemas.oauth import (
+    OAuthLoginResponse,
+    OAuthCallbackRequest,
+    OAuthCallbackResponse,
+    OAuthErrorResponse,
+)
 from app.services.auth_service import AuthService
+from app.services.oauth_service import OAuthService
 from app.repositories.token_repository import TokenRepository
 
 router = APIRouter()
@@ -74,3 +81,103 @@ async def logout(
     await db.commit()
 
     return {"message": "Successfully logged out"}
+
+
+# ==================== OAuth Endpoints ====================
+
+
+@router.get("/oauth/google/login", response_model=OAuthLoginResponse)
+async def google_oauth_login(db: AsyncSession = Depends(get_db)):
+    """
+    Initiate Google OAuth login flow.
+
+    Returns an authorization URL that the client should redirect the user to.
+    """
+    try:
+        oauth_service = OAuthService(db)
+        auth_url, state = await oauth_service.get_authorization_url("google")
+
+        return OAuthLoginResponse(authorization_url=auth_url, state=state)
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"OAuth initialization failed: {str(e)}"
+        )
+
+
+@router.post("/oauth/google/callback", response_model=OAuthCallbackResponse)
+async def google_oauth_callback(
+    callback_data: OAuthCallbackRequest, db: AsyncSession = Depends(get_db)
+):
+    """
+    Handle Google OAuth callback.
+
+    Exchanges authorization code for tokens and creates/logs in user.
+    """
+    try:
+        oauth_service = OAuthService(db)
+
+        # Exchange code for tokens and get/create user
+        user, is_new_user = await oauth_service.authenticate_user(
+            provider="google", code=callback_data.code, state=callback_data.state
+        )
+
+        # Generate JWT access token for the user
+        from app.core.security import create_access_token
+
+        access_token = create_access_token(subject=user.id)
+
+        # Convert user to response format
+        from app.schemas.user import UserResponse
+
+        user_data = UserResponse.from_orm(user).dict()
+
+        return OAuthCallbackResponse(
+            access_token=access_token, token_type="bearer", user=user_data
+        )
+
+    except ValueError as e:
+        # OAuth-specific errors (invalid state, code exchange failure, etc.)
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        # Unexpected errors
+        raise HTTPException(status_code=500, detail=f"OAuth callback failed: {str(e)}")
+
+
+@router.get("/oauth/google/callback")
+async def google_oauth_callback_get(
+    code: str = Query(..., description="Authorization code from Google"),
+    state: str = Query(..., description="State parameter for CSRF protection"),
+    error: str = Query(None, description="Error from OAuth provider"),
+    error_description: str = Query(None, description="Error description"),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Handle Google OAuth callback via GET request (browser redirect).
+
+    This endpoint handles the browser redirect from Google after user authorization.
+    It can either return a success response or redirect to the frontend with tokens.
+    """
+    # Check for OAuth errors first
+    if error:
+        raise HTTPException(
+            status_code=400, detail=f"OAuth error: {error}. {error_description or ''}"
+        )
+
+    try:
+        # Use the same callback logic as the POST endpoint
+        callback_data = OAuthCallbackRequest(code=code, state=state)
+        result = await google_oauth_callback(callback_data, db)
+
+        # In a real application, you might want to redirect to the frontend
+        # with the token as a query parameter or set an HTTP-only cookie
+        return {
+            "message": "OAuth login successful",
+            "access_token": result.access_token,
+            "user": result.user,
+        }
+
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"OAuth callback failed: {str(e)}")

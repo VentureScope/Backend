@@ -31,12 +31,32 @@ class AuthService:
     async def login(self, data: UserLogin) -> str:
         user = await self.repo.get_by_email(data.email)
 
-        # Always perform password verification to prevent timing attacks.
-        # Use a dummy hash when user doesn't exist to maintain consistent timing.
-        password_hash = user.password_hash if user else _DUMMY_HASH
-        password_valid = verify_password(data.password, password_hash)
+        # Check if user exists and is active
+        if not user or not user.is_active:
+            # Use dummy hash for timing consistency even when user doesn't exist
+            verify_password(data.password, _DUMMY_HASH)
+            raise ValueError("Invalid email or password")
 
-        if not user or not password_valid or not user.is_active:
+        # Check if this is an OAuth user trying to login with password
+        if user.password_hash is None or user.oauth_provider is not None:
+            # Use dummy hash for timing consistency
+            verify_password(data.password, _DUMMY_HASH)
+            raise ValueError(
+                "This account uses OAuth login. Please use the OAuth login option."
+            )
+
+        # Verify password for regular users
+        password_valid = verify_password(data.password, user.password_hash)
+        if not password_valid:
             raise ValueError("Invalid email or password")
 
         return create_access_token(subject=user.id)
+
+    async def get_user_by_id(self, user_id: str) -> User | None:
+        """Get user by ID, works for both regular and OAuth users."""
+        return await self.repo.get_active_by_id(user_id)
+
+    async def get_user_by_email(self, email: str) -> User | None:
+        """Get user by email, works for both regular and OAuth users."""
+        user = await self.repo.get_by_email(email)
+        return user if user and user.is_active else None
