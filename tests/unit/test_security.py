@@ -8,6 +8,8 @@ from app.core.security import (
     verify_password,
     create_access_token,
     decode_access_token,
+    decode_access_token_full,
+    TokenPayload,
 )
 
 
@@ -146,3 +148,78 @@ class TestJWTTokens:
             token = create_access_token(subject)
             decoded_subject = decode_access_token(token)
             assert decoded_subject == subject
+
+
+@pytest.mark.unit
+class TestJWTTokensWithJTI:
+    """Test JWT token creation and verification with JTI support."""
+
+    def test_decode_access_token_full_returns_token_payload(self):
+        """Test that decode_access_token_full returns full TokenPayload."""
+        subject = "test_user_id"
+        token = create_access_token(subject)
+
+        payload = decode_access_token_full(token)
+
+        assert payload is not None
+        assert isinstance(payload, TokenPayload)
+        assert payload.sub == subject
+        assert payload.jti is not None
+        assert len(payload.jti) > 0
+        assert payload.exp is not None
+
+    def test_decode_access_token_full_jti_is_unique(self):
+        """Test that each token has a unique JTI."""
+        subject = "test_user_id"
+        token1 = create_access_token(subject)
+        token2 = create_access_token(subject)
+
+        payload1 = decode_access_token_full(token1)
+        payload2 = decode_access_token_full(token2)
+
+        assert payload1.jti != payload2.jti
+
+    def test_decode_access_token_full_invalid_token(self):
+        """Test decode_access_token_full returns None for invalid token."""
+        invalid_token = "invalid.token.here"
+
+        payload = decode_access_token_full(invalid_token)
+        assert payload is None
+
+    def test_decode_access_token_full_empty_token(self):
+        """Test decode_access_token_full returns None for empty token."""
+        payload = decode_access_token_full("")
+        assert payload is None
+
+    def test_decode_access_token_full_malformed_token(self):
+        """Test decode_access_token_full returns None for malformed token."""
+        payload = decode_access_token_full("not_a_jwt_at_all")
+        assert payload is None
+
+    def test_decode_access_token_full_expiration_is_datetime(self):
+        """Test that exp in TokenPayload is a datetime object."""
+        from datetime import datetime
+
+        subject = "test_user_id"
+        token = create_access_token(subject)
+
+        payload = decode_access_token_full(token)
+
+        assert isinstance(payload.exp, datetime)
+
+    def test_decode_access_token_full_custom_expiration(self):
+        """Test decode_access_token_full with custom expiration."""
+        subject = "test_user_id"
+        expires_delta = timedelta(hours=2)
+        token = create_access_token(subject, expires_delta)
+
+        payload = decode_access_token_full(token)
+
+        assert payload is not None
+        assert payload.sub == subject
+        # Expiration should be approximately 2 hours from now
+        from datetime import datetime, timezone
+
+        expected_exp = datetime.now(timezone.utc) + expires_delta
+        # Allow 5 second tolerance
+        assert abs((payload.exp - expected_exp).total_seconds()) < 5

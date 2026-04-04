@@ -72,6 +72,20 @@ Authorization: Bearer <your-jwt-token>
   }
   ```
 
+#### Logout
+- **POST** `/api/auth/logout`
+- **Description**: Logout user by invalidating the current access token
+- **Authentication**: Required (Bearer token)
+- **Response**:
+  ```json
+  {
+    "message": "Successfully logged out"
+  }
+  ```
+- **Error Responses**:
+  - **401**: Invalid or expired token
+  - **400**: Token already invalidated (double logout attempt)
+
 ### User Management (Self-Service)
 
 #### Get Current User
@@ -260,4 +274,4 @@ Currently no rate limiting implemented. Consider implementing for production.
 API is currently unversioned. Future versions should follow semantic versioning.
 
 ## Last Updated
-April 3, 2026 - Phase B: User Management CRUD Implementation
+April 3, 2026 - Added Logout Endpoint with Token Invalidation (Token Blocklist)
