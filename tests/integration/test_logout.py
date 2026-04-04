@@ -40,7 +40,7 @@ class TestLogoutEndpoint:
         headers = {"Authorization": "Bearer invalid_token_here"}
         response = await client.post("/api/auth/logout", headers=headers)
         assert response.status_code == 401
-        assert "Invalid or expired token" in response.json()["detail"]
+        assert "Malformed token" in response.json()["detail"]
 
     @pytest.mark.asyncio
     async def test_logout_with_expired_token(
@@ -56,7 +56,7 @@ class TestLogoutEndpoint:
         headers = {"Authorization": f"Bearer {expired_token}"}
         response = await client.post("/api/auth/logout", headers=headers)
         assert response.status_code == 401
-        assert "Invalid or expired token" in response.json()["detail"]
+        assert "Token has expired" in response.json()["detail"]
 
     @pytest.mark.asyncio
     async def test_logout_twice_fails(

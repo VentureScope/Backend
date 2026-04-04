@@ -3,7 +3,7 @@ Token Repository - Database operations for token blocklist.
 """
 
 from datetime import datetime, timezone
-from sqlalchemy import select, delete
+from sqlalchemy import select, delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.token_blocklist import TokenBlocklist
@@ -78,8 +78,6 @@ class TokenRepository:
         Returns:
             Count of blocklisted tokens
         """
-        from sqlalchemy import func
-
         query = select(func.count(TokenBlocklist.id))
         result = await self.db.execute(query)
         return result.scalar_one()

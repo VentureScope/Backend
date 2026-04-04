@@ -4,6 +4,7 @@ import pytest
 import pytest_asyncio
 from datetime import datetime, timedelta, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import IntegrityError
 
 from app.repositories.token_repository import TokenRepository
 from app.models.token_blocklist import TokenBlocklist
@@ -133,8 +134,6 @@ class TestTokenRepository:
         await db_session.commit()
 
         # Trying to add the same JTI should raise an error
-        from sqlalchemy.exc import IntegrityError
-
         with pytest.raises(IntegrityError):
             await repo.add_to_blocklist(jti, "user-2", expires_at)
             await db_session.commit()

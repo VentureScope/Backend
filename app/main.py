@@ -24,11 +24,11 @@ async def cleanup_expired_tokens():
     """
     Background task that periodically cleans up expired tokens from the blocklist.
 
-    Runs every hour to remove tokens that have already expired.
+    Runs at the interval specified in settings.TOKEN_CLEANUP_INTERVAL_SECONDS.
     """
     while True:
         try:
-            await asyncio.sleep(3600)  # Run every hour
+            await asyncio.sleep(settings.TOKEN_CLEANUP_INTERVAL_SECONDS)
             async with AsyncSessionLocal() as db:
                 repo = TokenRepository(db)
                 count = await repo.cleanup_expired()

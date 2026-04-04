@@ -1,7 +1,7 @@
 """Unit tests for security functions."""
 
 import pytest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from app.core.security import (
     hash_password,
@@ -198,8 +198,6 @@ class TestJWTTokensWithJTI:
 
     def test_decode_access_token_full_expiration_is_datetime(self):
         """Test that exp in TokenPayload is a datetime object."""
-        from datetime import datetime
-
         subject = "test_user_id"
         token = create_access_token(subject)
 
@@ -218,8 +216,6 @@ class TestJWTTokensWithJTI:
         assert payload is not None
         assert payload.sub == subject
         # Expiration should be approximately 2 hours from now
-        from datetime import datetime, timezone
-
         expected_exp = datetime.now(timezone.utc) + expires_delta
         # Allow 5 second tolerance
         assert abs((payload.exp - expected_exp).total_seconds()) < 5
