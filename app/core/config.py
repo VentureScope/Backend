@@ -52,12 +52,18 @@ class Settings(BaseSettings):
     GOOGLE_CLIENT_SECRET: str = ""
     GOOGLE_REDIRECT_URI: str = "http://localhost:8000/api/auth/oauth/google/callback"
 
+    # GitHub OAuth settings
+    GITHUB_CLIENT_ID: str = ""
+    GITHUB_CLIENT_SECRET: str = ""
+    GITHUB_REDIRECT_URI: str = "http://localhost:8000/api/auth/oauth/github/callback"
+
     # OAuth state management (for CSRF protection)
     OAUTH_STATE_SECRET: str = ""  # Should be different from JWT SECRET_KEY
     OAUTH_STATE_EXPIRE_MINUTES: int = 10  # Short expiration for security
 
     # OAuth scope configuration
     GOOGLE_OAUTH_SCOPES: List[str] = ["openid", "email", "profile"]
+    GITHUB_OAUTH_SCOPES: List[str] = ["read:user", "user:email"]
 
     # Environment setting
     ENVIRONMENT: str = "development"  # development, staging, production

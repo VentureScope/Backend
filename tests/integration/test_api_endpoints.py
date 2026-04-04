@@ -2,9 +2,10 @@
 
 import pytest
 from httpx import AsyncClient
-from unittest.mock import patch
+from unittest.mock import patch, AsyncMock
 
 from app.core.security import create_access_token
+from app.models.user import User
 
 
 @pytest.mark.integration
@@ -138,6 +139,65 @@ class TestAuthEndpoints:
 
         response = await client.post("/api/auth/login", json=login_data)
         assert response.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_github_oauth_login_success(self, client: AsyncClient):
+        """Test GitHub OAuth login endpoint returns authorization URL."""
+        with patch(
+            "app.api.auth.OAuthService.get_authorization_url",
+            new=AsyncMock(
+                return_value=(
+                    "https://github.com/login/oauth/authorize?client_id=test",
+                    "test_state_123",
+                )
+            ),
+        ):
+            response = await client.get("/api/auth/oauth/github/login")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["authorization_url"].startswith(
+            "https://github.com/login/oauth/authorize"
+        )
+        assert data["state"] == "test_state_123"
+
+    @pytest.mark.asyncio
+    async def test_github_oauth_callback_success(self, client: AsyncClient):
+        """Test GitHub OAuth callback exchanges code and returns app token."""
+        mock_user = User(
+            id="123e4567-e89b-12d3-a456-426614174000",
+            email="oauth-user@example.com",
+            full_name="OAuth User",
+            role="professional",
+            is_active=True,
+            is_admin=False,
+        )
+
+        with patch(
+            "app.api.auth.OAuthService.authenticate_user",
+            new=AsyncMock(return_value=(mock_user, True)),
+        ):
+            response = await client.post(
+                "/api/auth/oauth/github/callback",
+                json={"code": "github_auth_code", "state": "valid_state"},
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["token_type"] == "bearer"
+        assert "access_token" in data
+        assert data["user"]["email"] == "oauth-user@example.com"
+
+    @pytest.mark.asyncio
+    async def test_github_oauth_callback_error_from_provider(self, client: AsyncClient):
+        """Test GitHub OAuth GET callback returns 400 on provider error."""
+        response = await client.get(
+            "/api/auth/oauth/github/callback",
+            params={"code": "ignored", "state": "ignored", "error": "access_denied"},
+        )
+
+        assert response.status_code == 400
+        assert "OAuth error" in response.json()["detail"]
 
 
 @pytest.mark.integration

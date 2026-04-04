@@ -86,6 +86,72 @@ Authorization: Bearer <your-jwt-token>
   - **401**: Invalid or expired token
   - **400**: Token already invalidated (double logout attempt)
 
+#### OAuth Login (Google)
+- **GET** `/api/auth/oauth/google/login`
+- **Description**: Initiate Google OAuth flow and receive authorization URL
+- **Authentication**: None required
+- **Response**:
+  ```json
+  {
+    "authorization_url": "https://accounts.google.com/o/oauth2/v2/auth?...",
+    "state": "secure-state-token"
+  }
+  ```
+
+#### OAuth Callback (Google)
+- **POST** `/api/auth/oauth/google/callback`
+- **Description**: Exchange Google authorization code for app access token
+- **Authentication**: None required
+- **Body**:
+  ```json
+  {
+    "code": "google-auth-code",
+    "state": "secure-state-token"
+  }
+  ```
+- **Response**:
+  ```json
+  {
+    "access_token": "app-jwt-token",
+    "token_type": "bearer",
+    "user": {
+      "id": "uuid",
+      "email": "user@example.com",
+      "full_name": "John Doe",
+      "github_username": null,
+      "career_interest": null,
+      "role": "professional",
+      "is_active": true,
+      "is_admin": false
+    }
+  }
+  ```
+
+#### OAuth Login (GitHub)
+- **GET** `/api/auth/oauth/github/login`
+- **Description**: Initiate GitHub OAuth flow and receive authorization URL
+- **Authentication**: None required
+- **Response**:
+  ```json
+  {
+    "authorization_url": "https://github.com/login/oauth/authorize?...",
+    "state": "secure-state-token"
+  }
+  ```
+
+#### OAuth Callback (GitHub)
+- **POST** `/api/auth/oauth/github/callback`
+- **Description**: Exchange GitHub authorization code for app access token
+- **Authentication**: None required
+- **Body**:
+  ```json
+  {
+    "code": "github-auth-code",
+    "state": "secure-state-token"
+  }
+  ```
+- **Response**: Same as Google OAuth callback response format
+
 ### User Management (Self-Service)
 
 #### Get Current User

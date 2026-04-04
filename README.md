@@ -152,7 +152,7 @@ tests/
 |-------|-------------|---------|--------|
 | **A** | Alembic migrations | Versioned schema changes | ✅ **COMPLETED** |
 | **B** | Profile update, GitHub username | Complete User Management (FR1.2) | 🔄 Next |
-| **C** | OAuth (GitHub/Google) | Social login (doc) | ⏳ Pending |
+| **C** | OAuth (GitHub/Google) | Social login (doc) | ✅ **COMPLETED** |
 | **D** | `JobListing` model + `/api/jobs` (CRUD + search) | Job market data (FR4) | ⏳ Pending |
 | **E** | Job scrapers + Celery + Redis Beat | Weekly scraping (UC-08) | ⏳ Pending |
 | **F** | PGVector + embeddings + SBERT | Semantic job matching (FR5.1) | ⏳ Pending |

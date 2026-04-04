@@ -13,11 +13,10 @@ import secrets
 import hashlib
 import base64
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Dict, Any
-from urllib.parse import urlencode, parse_qs, urlparse
+from typing import Dict, Any
+from urllib.parse import urlencode
 
 import httpx
-from authlib.integrations.base_client import OAuthError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_
 
@@ -42,24 +41,92 @@ class OAuthProviderError(Exception):
 
 class OAuthService:
     """
-    OAuth 2.0 authentication service for Google and future providers.
+    OAuth 2.0 authentication service for supported providers.
 
     Implements secure OAuth flows with PKCE and state validation.
     """
+
+    SUPPORTED_PROVIDERS = {"google", "github"}
 
     def __init__(self, db: AsyncSession):
         self.db = db
         self.user_repo = UserRepository(db)
 
-        # Google OAuth 2.0 endpoints
-        self.google_config = {
-            "authorization_endpoint": "https://accounts.google.com/o/oauth2/v2/auth",
-            "token_endpoint": "https://oauth2.googleapis.com/token",
-            "userinfo_endpoint": "https://www.googleapis.com/oauth2/v2/userinfo",
-            "client_id": settings.GOOGLE_CLIENT_ID,
-            "client_secret": settings.GOOGLE_CLIENT_SECRET,
-            "redirect_uri": settings.GOOGLE_REDIRECT_URI,
-            "scopes": settings.GOOGLE_OAUTH_SCOPES,
+        self.provider_configs = {
+            "google": {
+                "authorization_endpoint": "https://accounts.google.com/o/oauth2/v2/auth",
+                "token_endpoint": "https://oauth2.googleapis.com/token",
+                "userinfo_endpoint": "https://www.googleapis.com/oauth2/v2/userinfo",
+                "client_id": settings.GOOGLE_CLIENT_ID,
+                "client_secret": settings.GOOGLE_CLIENT_SECRET,
+                "redirect_uri": settings.GOOGLE_REDIRECT_URI,
+                "scopes": settings.GOOGLE_OAUTH_SCOPES,
+                "authorization_extras": {
+                    "access_type": "offline",
+                    "prompt": "consent",
+                },
+            },
+            "github": {
+                "authorization_endpoint": "https://github.com/login/oauth/authorize",
+                "token_endpoint": "https://github.com/login/oauth/access_token",
+                "userinfo_endpoint": "https://api.github.com/user",
+                "email_endpoint": "https://api.github.com/user/emails",
+                "client_id": settings.GITHUB_CLIENT_ID,
+                "client_secret": settings.GITHUB_CLIENT_SECRET,
+                "redirect_uri": settings.GITHUB_REDIRECT_URI,
+                "scopes": settings.GITHUB_OAUTH_SCOPES,
+                "authorization_extras": {},
+            },
+        }
+
+    def _get_provider_config(self, provider: str) -> Dict[str, Any]:
+        if provider not in self.SUPPORTED_PROVIDERS:
+            raise ValueError(f"Unsupported provider: {provider}")
+        return self.provider_configs[provider]
+
+    async def _fetch_user_info(
+        self, client: httpx.AsyncClient, provider: str, access_token: str
+    ) -> Dict[str, Any]:
+        config = self._get_provider_config(provider)
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Accept": "application/json",
+        }
+
+        userinfo_response = await client.get(config["userinfo_endpoint"], headers=headers)
+        userinfo_response.raise_for_status()
+        user_info = userinfo_response.json()
+
+        if provider == "google":
+            return user_info
+
+        # Normalize GitHub payload to internal format expected by the user creation flow.
+        email = user_info.get("email")
+        if not email:
+            emails_response = await client.get(config["email_endpoint"], headers=headers)
+            emails_response.raise_for_status()
+            emails = emails_response.json()
+
+            primary_email = next(
+                (item.get("email") for item in emails if item.get("primary")),
+                None,
+            )
+            verified_email = next(
+                (item.get("email") for item in emails if item.get("verified")),
+                None,
+            )
+            email = primary_email or verified_email
+
+        if not email:
+            raise OAuthProviderError("GitHub account does not expose an accessible email")
+
+        return {
+            "id": str(user_info["id"]),
+            "email": email,
+            "name": user_info.get("name") or user_info.get("login"),
+            "picture": user_info.get("avatar_url"),
+            "email_verified": True,
+            "provider_login": user_info.get("login"),
         }
 
     def generate_state(self) -> str:
@@ -129,7 +196,7 @@ class OAuthService:
         Generate OAuth authorization URL with PKCE and state.
 
         Args:
-            provider: OAuth provider ('google' for now)
+            provider: OAuth provider name
 
         Returns:
             Dictionary with 'url' and 'state' for frontend
@@ -137,10 +204,7 @@ class OAuthService:
         Raises:
             ValueError: If provider is not supported
         """
-        if provider != "google":
-            raise ValueError(f"Unsupported OAuth provider: {provider}")
-
-        config = self.google_config
+        config = self._get_provider_config(provider)
 
         # Generate state for CSRF protection
         state = self.generate_state()
@@ -152,9 +216,8 @@ class OAuthService:
             "scope": " ".join(config["scopes"]),
             "response_type": "code",
             "state": state,
-            "access_type": "offline",  # Request refresh token
-            "prompt": "consent",  # Force consent to get refresh token
         }
+        params.update(config.get("authorization_extras", {}))
 
         authorization_url = f"{config['authorization_endpoint']}?{urlencode(params)}"
 
@@ -181,10 +244,7 @@ class OAuthService:
         # Validate state first
         self.validate_state(state)
 
-        if provider != "google":
-            raise ValueError(f"Unsupported OAuth provider: {provider}")
-
-        config = self.google_config
+        config = self._get_provider_config(provider)
 
         # Exchange code for tokens
         token_data = {
@@ -216,12 +276,11 @@ class OAuthService:
 
             # Get user info
             try:
-                userinfo_response = await client.get(
-                    config["userinfo_endpoint"],
-                    headers={"Authorization": f"Bearer {tokens['access_token']}"},
+                user_info = await self._fetch_user_info(
+                    client=client,
+                    provider=provider,
+                    access_token=tokens["access_token"],
                 )
-                userinfo_response.raise_for_status()
-                user_info = userinfo_response.json()
 
             except httpx.HTTPError as e:
                 raise OAuthProviderError(f"Failed to get user info: {e}")
@@ -357,26 +416,8 @@ class OAuthService:
         Returns:
             Tuple of (authorization_url, state)
         """
-        if provider != "google":
-            raise ValueError(f"Unsupported provider: {provider}")
-
-        # Generate secure state for CSRF protection
-        state = self.generate_state()
-
-        # Google OAuth parameters
-        params = {
-            "client_id": settings.GOOGLE_CLIENT_ID,
-            "response_type": "code",
-            "scope": " ".join(settings.GOOGLE_OAUTH_SCOPES),
-            "redirect_uri": settings.GOOGLE_REDIRECT_URI,
-            "state": state,
-            "access_type": "offline",  # Request refresh token
-            "prompt": "consent",  # Force consent screen to get refresh token
-        }
-
-        auth_url = f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}"
-
-        return auth_url, state
+        auth_data = self.generate_authorization_url(provider=provider)
+        return auth_data["url"], auth_data["state"]
 
     async def authenticate_user(
         self, provider: str, code: str, state: str
@@ -392,8 +433,7 @@ class OAuthService:
         Returns:
             Tuple of (User object, is_new_user boolean)
         """
-        if provider != "google":
-            raise ValueError(f"Unsupported provider: {provider}")
+        self._get_provider_config(provider)
 
         # Exchange code for tokens and get user info
         oauth_data = await self.exchange_code_for_tokens(code, state, provider)
