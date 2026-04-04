@@ -71,12 +71,37 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Configure CORS with environment-appropriate settings
+cors_origins = settings.get_cors_origins()
+
+# Log CORS configuration for debugging
+logger.info(f"CORS Configuration:")
+logger.info(f"  Environment: {settings.ENVIRONMENT}")
+logger.info(f"  Origins: {cors_origins}")
+logger.info(f"  Allow Credentials: {settings.CORS_ALLOW_CREDENTIALS}")
+logger.info(f"  Allow Methods: {settings.CORS_ALLOW_METHODS}")
+
+# Security warning for development
+if cors_origins == "*":
+    logger.warning(
+        "CORS configured to allow ALL origins (*). "
+        "This should ONLY be used in development!"
+    )
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=cors_origins,
+    allow_credentials=settings.CORS_ALLOW_CREDENTIALS,
+    allow_methods=settings.CORS_ALLOW_METHODS,
+    allow_headers=settings.CORS_ALLOW_HEADERS,
+    expose_headers=[
+        "Content-Length",
+        "Content-Range",
+        "Content-Type",
+        "Date",
+        "Server",
+        "Transfer-Encoding",
+    ],
 )
 
 
