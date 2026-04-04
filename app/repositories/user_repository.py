@@ -61,3 +61,18 @@ class UserRepository:
             select(User).where(User.id == user_id, User.is_active == True)  # noqa: E712
         )
         return result.scalars().one_or_none()
+
+    async def get_similar_users(self, user_embedding: list[float], limit: int = 5, exclude_user_id: str | None = None) -> list[User]:
+        """
+        Use pgvector cosine_distance to mathematically retrieve users who have similar
+        career interests, github, and estudent profiles. 
+        """
+        query = select(User).where(User.embedding.is_not(None))
+        if exclude_user_id:
+            query = query.where(User.id != exclude_user_id)
+            
+        # Order by Cosine Distance
+        query = query.order_by(User.embedding.cosine_distance(user_embedding)).limit(limit)
+        
+        result = await self.db.execute(query)
+        return list(result.scalars().all())

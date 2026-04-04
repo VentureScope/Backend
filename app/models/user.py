@@ -8,6 +8,10 @@ from sqlalchemy.orm import Mapped, mapped_column
 import uuid
 import enum
 
+# Use pgvector
+from pgvector.sqlalchemy import Vector
+from app.core.config import settings
+
 from app.core.database import Base
 
 
@@ -30,6 +34,13 @@ class User(Base):
     full_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     github_username: Mapped[str | None] = mapped_column(String(255), nullable=True)
     career_interest: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    estudent_profile: Mapped[str | None] = mapped_column(String(1000), nullable=True)  # E-student summarized profile
+    
+    # Store generated similarity embedding using pgvector
+    embedding: Mapped[list[float] | None] = mapped_column(
+        Vector(settings.EMBEDDING_DIMENSIONS), nullable=True
+    )
+
     role: Mapped[str] = mapped_column(
         String(32), default=UserRole.PROFESSIONAL.value, nullable=False
     )

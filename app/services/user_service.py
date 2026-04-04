@@ -9,6 +9,7 @@ from app.core.security import hash_password, verify_password
 from app.models.user import User
 from app.repositories.user_repository import UserRepository
 from app.schemas.user import UserUpdate, PasswordChange, UserAdminUpdate
+from app.services.embedding_service import get_embedding_service
 
 
 class UserService:
@@ -17,6 +18,18 @@ class UserService:
     def __init__(self, db: AsyncSession):
         self.db = db
         self.repo = UserRepository(db)
+        self.embedding_service = get_embedding_service()
+
+    # ==================== Helper Operations ====================
+
+    def _update_user_embedding(self, user: User) -> None:
+        """Helper to compute and update the user's embedding based on their current text attributes."""
+        doc = self.embedding_service.construct_user_document(
+            career_interest=user.career_interest,
+            github_profile=user.github_username, # In a real app you might fetch the actual github README/bio here
+            estudent_profile=user.estudent_profile
+        )
+        user.embedding = self.embedding_service.generate_embedding(doc)
 
     # ==================== Self-Service Operations ====================
 
@@ -40,6 +53,10 @@ class UserService:
         update_data = data.model_dump(exclude_unset=True)
         for field, value in update_data.items():
             setattr(user, field, value)
+
+        # Vectorize new data
+        if any(key in update_data for key in ['career_interest', 'github_username', 'estudent_profile']):
+            self._update_user_embedding(user)
 
         return await self.repo.update(user)
 
@@ -120,6 +137,10 @@ class UserService:
         update_data = data.model_dump(exclude_unset=True)
         for field, value in update_data.items():
             setattr(user, field, value)
+
+        # Vectorize new data if needed
+        if any(key in update_data for key in ['career_interest', 'github_username', 'estudent_profile']):
+            self._update_user_embedding(user)
 
         return await self.repo.update(user)
 

@@ -22,6 +22,7 @@ class UserResponse(BaseModel):
     full_name: str | None
     github_username: str | None
     career_interest: str | None
+    estudent_profile: str | None
     role: str
     is_active: bool
     is_admin: bool
@@ -49,6 +50,7 @@ class UserUpdate(BaseModel):
     full_name: str | None = None
     github_username: str | None = None
     career_interest: str | None = None
+    estudent_profile: str | None = None
 
     class Config:
         from_attributes = True
@@ -69,6 +71,7 @@ class UserAdminUpdate(BaseModel):
     full_name: str | None = None
     github_username: str | None = None
     career_interest: str | None = None
+    estudent_profile: str | None = None
     role: RoleType | None = None
     is_active: bool | None = None
     is_admin: bool | None = None

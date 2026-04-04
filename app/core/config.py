@@ -20,6 +20,10 @@ class Settings(BaseSettings):
     # CORS
     CORS_ORIGINS: list[str] = ["http://localhost:3000", "http://127.0.0.1:3000"]
 
+    # Embeddings
+    EMBEDDING_MODEL_NAME: str = "all-MiniLM-L6-v2"
+    EMBEDDING_DIMENSIONS: int = 384
+
     class Config:
         env_file = ".env"
         extra = "ignore"
