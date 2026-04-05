@@ -1,0 +1,73 @@
+# .gitattributes - Cross-platform line ending configuration
+# This ensures consistent line endings across Windows, macOS, and Linux
+
+# Default behavior: normalize line endings to LF on commit, auto-convert on checkout
+* text=auto
+
+# Source code files - enforce LF line endings
+*.py text eol=lf
+*.js text eol=lf
+*.ts text eol=lf
+*.jsx text eol=lf
+*.tsx text eol=lf
+*.json text eol=lf
+*.css text eol=lf
+*.scss text eol=lf
+*.sass text eol=lf
+*.html text eol=lf
+*.xml text eol=lf
+*.svg text eol=lf
+
+# Configuration and documentation files - enforce LF
+*.md text eol=lf
+*.txt text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.toml text eol=lf
+*.ini text eol=lf
+*.cfg text eol=lf
+*.conf text eol=lf
+Dockerfile text eol=lf
+.env.example text eol=lf
+
+# Shell scripts - enforce LF (critical for Unix environments)
+*.sh text eol=lf
+*.bash text eol=lf
+*.zsh text eol=lf
+
+# Windows-specific files - enforce CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Database and migration files - enforce LF
+*.sql text eol=lf
+
+# Git files
+.gitignore text eol=lf
+.gitattributes text eol=lf
+
+# Binary files (don't normalize)
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.tar.gz binary
+*.woff binary
+*.woff2 binary
+*.eot binary
+*.ttf binary
+*.otf binary
+
+# Python bytecode and caches (shouldn't be in repo, but just in case)
+*.pyc binary
+*.pyo binary
+*.pyd binary
+
+# Special handling for specific files
+requirements*.txt text eol=lf
+LICENSE text eol=lf
+README* text eol=lf
