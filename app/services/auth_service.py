@@ -5,6 +5,7 @@ from app.models.user import User
 from app.repositories.user_repository import UserRepository
 from app.schemas.user import UserCreate, UserLogin
 from app.services.embedding_service import get_embedding_service
+from app.services.github_service import fetch_github_profile_description
 
 # Dummy password hash for timing-attack prevention.
 # Used when user doesn't exist to ensure consistent response time.
@@ -22,9 +23,11 @@ class AuthService:
         if existing:
             raise ValueError("Email already registered")
             
+        github_profile_desc = await fetch_github_profile_description(data.github_username) if data.github_username else None
+            
         doc = self.embedding_service.construct_user_document(
             career_interest=data.career_interest,
-            github_profile=None,
+            github_profile=github_profile_desc,
             estudent_profile=None
         )
         embedding = self.embedding_service.generate_embedding(doc)
@@ -33,6 +36,7 @@ class AuthService:
             email=data.email,
             password_hash=hash_password(data.password),
             full_name=data.full_name,
+            github_username=data.github_username,
             career_interest=data.career_interest,
             role=data.role,
             embedding=embedding

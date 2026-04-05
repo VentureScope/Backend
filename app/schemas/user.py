@@ -12,6 +12,7 @@ class UserCreate(BaseModel):
         ..., min_length=8, description="Password must be at least 8 characters"
     )
     full_name: str | None = None
+    github_username: str | None = None
     career_interest: str | None = None
     role: RoleType = "professional"
 

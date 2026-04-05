@@ -10,6 +10,7 @@ from app.models.user import User
 from app.repositories.user_repository import UserRepository
 from app.schemas.user import UserUpdate, PasswordChange, UserAdminUpdate
 from app.services.embedding_service import get_embedding_service
+from app.services.github_service import fetch_github_profile_description
 
 
 class UserService:
@@ -22,11 +23,13 @@ class UserService:
 
     # ==================== Helper Operations ====================
 
-    def _update_user_embedding(self, user: User) -> None:
+    async def _update_user_embedding(self, user: User) -> None:
         """Helper to compute and update the user's embedding based on their current text attributes."""
+        github_profile_desc = await fetch_github_profile_description(user.github_username) if user.github_username else None
+        
         doc = self.embedding_service.construct_user_document(
             career_interest=user.career_interest,
-            github_profile=user.github_username, # In a real app you might fetch the actual github README/bio here
+            github_profile=github_profile_desc,
             estudent_profile=user.estudent_profile
         )
         user.embedding = self.embedding_service.generate_embedding(doc)
@@ -56,7 +59,7 @@ class UserService:
 
         # Vectorize new data
         if any(key in update_data for key in ['career_interest', 'github_username', 'estudent_profile']):
-            self._update_user_embedding(user)
+            await self._update_user_embedding(user)
 
         return await self.repo.update(user)
 
@@ -140,7 +143,7 @@ class UserService:
 
         # Vectorize new data if needed
         if any(key in update_data for key in ['career_interest', 'github_username', 'estudent_profile']):
-            self._update_user_embedding(user)
+            await self._update_user_embedding(user)
 
         return await self.repo.update(user)
 

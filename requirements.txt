@@ -30,5 +30,8 @@ httpx==0.28.1
 faker==33.1.0
 pytest-cov==6.0.0
 pgvector==0.2.5
-sentence-transformers==2.5.1
-numpy<2  # Pinned since some ML packages have issues with numpy 2 out of the box in older environments
+openai
+langchain
+langchain-community
+langchain-openai
+# numpy<2  # Pinned since some ML packages have issues with numpy 2 out of the box in older environments

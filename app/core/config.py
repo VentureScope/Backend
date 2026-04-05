@@ -189,7 +189,7 @@ class Settings(BaseSettings):
 
     # Embeddings
     EMBEDDING_MODEL_NAME: str = "all-MiniLM-L6-v2"
-    EMBEDDING_DIMENSIONS: int = 384
+    EMBEDDING_DIMENSIONS: int = 1536
 
     class Config:
         env_file = ".env"

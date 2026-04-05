@@ -1,7 +1,7 @@
 """Add estudent_profile and pgvector embeddings
 
 Revision ID: 17d98104cc07
-Revises: b2f8a3c91d45
+Revises: d7f1b2c93e47
 Create Date: 2026-04-04 10:20:36.256849+00:00
 
 """
@@ -14,7 +14,7 @@ import pgvector
 
 # revision identifiers, used by Alembic.
 revision: str = '17d98104cc07'
-down_revision: Union[str, None] = 'b2f8a3c91d45'
+down_revision: Union[str, None] = 'd7f1b2c93e47'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
