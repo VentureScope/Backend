@@ -93,7 +93,9 @@ class OAuthService:
             "Accept": "application/json",
         }
 
-        userinfo_response = await client.get(config["userinfo_endpoint"], headers=headers)
+        userinfo_response = await client.get(
+            config["userinfo_endpoint"], headers=headers
+        )
         userinfo_response.raise_for_status()
         user_info = userinfo_response.json()
 
@@ -103,7 +105,9 @@ class OAuthService:
         # Normalize GitHub payload to internal format expected by the user creation flow.
         email = user_info.get("email")
         if not email:
-            emails_response = await client.get(config["email_endpoint"], headers=headers)
+            emails_response = await client.get(
+                config["email_endpoint"], headers=headers
+            )
             emails_response.raise_for_status()
             emails = emails_response.json()
 
@@ -118,7 +122,9 @@ class OAuthService:
             email = primary_email or verified_email
 
         if not email:
-            raise OAuthProviderError("GitHub account does not expose an accessible email")
+            raise OAuthProviderError(
+                "GitHub account does not expose an accessible email"
+            )
 
         return {
             "id": str(user_info["id"]),
@@ -329,9 +335,27 @@ class OAuthService:
             oauth_account.provider_data = json.dumps(user_info)
             oauth_account.updated_at = datetime.now(timezone.utc)
 
+            # Update GitHub username if provider is GitHub and username has changed
+            # IMPORTANT: Get user directly to avoid lazy loading relationship
+            if provider == "github" and user_info.get("provider_login"):
+                # Query user directly instead of using oauth_account.user relationship
+                user_result = await self.db.execute(
+                    select(User).where(User.id == oauth_account.user_id)
+                )
+                user = user_result.scalar_one()
+
+                if user.github_username != user_info.get("provider_login"):
+                    user.github_username = user_info.get("provider_login")
+
             await self.db.commit()
             await self.db.refresh(oauth_account)
-            return oauth_account.user
+
+            # Return the user by querying directly, not through relationship
+            user_result = await self.db.execute(
+                select(User).where(User.id == oauth_account.user_id)
+            )
+            user = user_result.scalar_one()
+            return user
 
         # Try to find user by email (account linking)
         existing_user = await self.user_repo.get_by_email(email)
@@ -339,15 +363,31 @@ class OAuthService:
         if existing_user:
             # Link OAuth account to existing user
             user = existing_user
+            # Set GitHub username if this is GitHub OAuth and user doesn't have one
+            if (
+                provider == "github"
+                and user_info.get("provider_login")
+                and not user.github_username
+            ):
+                user.github_username = user_info.get("provider_login")
+                await self.db.flush()
         else:
-            # Create new user
+            # Create new user with GitHub username if it's GitHub OAuth
+            user_kwargs = {
+                "profile_picture_url": user_info.get("picture"),
+                "oauth_provider": provider,
+                "oauth_id": provider_id,
+                "email_verified": user_info.get("email_verified", True),
+            }
+
+            # Add GitHub username for GitHub OAuth
+            if provider == "github" and user_info.get("provider_login"):
+                user_kwargs["github_username"] = user_info.get("provider_login")
+
             user = await self.user_repo.create_oauth_user(
                 email=email,
                 full_name=user_info.get("name"),
-                profile_picture_url=user_info.get("picture"),
-                oauth_provider=provider,
-                oauth_id=provider_id,
-                email_verified=user_info.get("email_verified", True),
+                **user_kwargs,
             )
 
         # Create OAuth account record
@@ -360,6 +400,7 @@ class OAuthService:
             token_expires_at=tokens.get("expires_in"),
             user_info=user_info,
         )
+
         await self.db.commit()
         await self.db.refresh(user)
 
@@ -399,6 +440,7 @@ class OAuthService:
                 "id": user.id,
                 "email": user.email,
                 "full_name": user.full_name,
+                "github_username": user.github_username,
                 "profile_picture_url": user.profile_picture_url,
                 "is_active": user.is_active,
                 "email_verified": user.email_verified,
@@ -448,6 +490,8 @@ class OAuthService:
         # Determine if this is a new user (created in this session)
         # We can check if the user was created recently (within last minute)
         now = datetime.now(timezone.utc)
-        is_new_user = (now - user.created_at).total_seconds() < 60
+        is_new_user = (
+            user.created_at is not None and (now - user.created_at).total_seconds() < 60
+        )
 
         return user, is_new_user

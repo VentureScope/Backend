@@ -117,19 +117,30 @@ async def _oauth_callback(
 
         access_token = create_access_token(subject=user.id)
 
-        # Convert user to response format
-        from app.schemas.user import UserResponse
+        # Convert user to response format manually to avoid relationship loading issues
+        user_data = {
+            "id": user.id,
+            "email": user.email,
+            "full_name": user.full_name,
+            "github_username": user.github_username,
+            "career_interest": user.career_interest,
+            "role": user.role,
+            "is_active": user.is_active,
+            "is_admin": user.is_admin,
+        }
 
-        user_data = UserResponse.from_orm(user).dict()
-
-        return OAuthCallbackResponse(
+        response = OAuthCallbackResponse(
             access_token=access_token, token_type="bearer", user=user_data
         )
+        return response
 
     except ValueError as e:
         # OAuth-specific errors (invalid state, code exchange failure, etc.)
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
+        import traceback
+
+        traceback.print_exc()
         # Unexpected errors
         raise HTTPException(status_code=500, detail=f"OAuth callback failed: {str(e)}")
 

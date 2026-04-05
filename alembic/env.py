@@ -1,9 +1,12 @@
 import asyncio
 import os
 from logging.config import fileConfig
+<<<<<<< HEAD
 from dotenv import load_dotenv
 
 load_dotenv()
+=======
+>>>>>>> 1d7982f04e8e0b87f239967dd1da56e0ffec77ea
 
 from sqlalchemy import pool
 from sqlalchemy.engine import Connection

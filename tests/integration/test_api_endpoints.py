@@ -168,6 +168,7 @@ class TestAuthEndpoints:
             id="123e4567-e89b-12d3-a456-426614174000",
             email="oauth-user@example.com",
             full_name="OAuth User",
+            github_username="github-test-user",
             role="professional",
             is_active=True,
             is_admin=False,
@@ -187,6 +188,7 @@ class TestAuthEndpoints:
         assert data["token_type"] == "bearer"
         assert "access_token" in data
         assert data["user"]["email"] == "oauth-user@example.com"
+        assert data["user"]["github_username"] == "github-test-user"
 
     @pytest.mark.asyncio
     async def test_github_oauth_callback_error_from_provider(self, client: AsyncClient):
