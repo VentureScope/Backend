@@ -120,7 +120,7 @@ async def _oauth_callback(
         # Convert user to response format
         from app.schemas.user import UserResponse
 
-        user_data = UserResponse.from_orm(user).dict()
+        user_data = UserResponse.model_validate(user).model_dump()
 
         return OAuthCallbackResponse(
             access_token=access_token, token_type="bearer", user=user_data

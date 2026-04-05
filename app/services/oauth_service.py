@@ -331,7 +331,12 @@ class OAuthService:
 
             await self.db.commit()
             await self.db.refresh(oauth_account)
-            return oauth_account.user
+
+            # Avoid lazy-loading relationship access in async contexts.
+            user = await self.user_repo.get_by_id(oauth_account.user_id)
+            if not user:
+                raise OAuthProviderError("OAuth account is linked to a missing user")
+            return user
 
         # Try to find user by email (account linking)
         existing_user = await self.user_repo.get_by_email(email)
