@@ -1,13 +1,19 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.security import decode_access_token_with_details, TokenError
 from app.schemas.user import UserCreate, UserLogin, UserResponse, Token
+from app.schemas.oauth import (
+    OAuthLoginResponse,
+    OAuthCallbackRequest,
+    OAuthCallbackResponse,
+)
 from app.services.auth_service import AuthService
+from app.services.oauth_service import OAuthService
 from app.repositories.token_repository import TokenRepository
 
 router = APIRouter()
@@ -74,3 +80,151 @@ async def logout(
     await db.commit()
 
     return {"message": "Successfully logged out"}
+
+
+# ==================== OAuth Endpoints ====================
+
+
+async def _oauth_login(provider: str, db: AsyncSession) -> OAuthLoginResponse:
+    """Initiate OAuth login flow and return provider authorization URL."""
+    try:
+        oauth_service = OAuthService(db)
+        auth_url, state = await oauth_service.get_authorization_url(provider)
+
+        return OAuthLoginResponse(authorization_url=auth_url, state=state)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"OAuth initialization failed: {str(e)}"
+        )
+
+
+async def _oauth_callback(
+    provider: str, callback_data: OAuthCallbackRequest, db: AsyncSession
+) -> OAuthCallbackResponse:
+    """Handle OAuth callback by exchanging code and issuing app token."""
+    try:
+        oauth_service = OAuthService(db)
+
+        # Exchange code for tokens and get/create user
+        user, _ = await oauth_service.authenticate_user(
+            provider=provider, code=callback_data.code, state=callback_data.state
+        )
+
+        # Generate JWT access token for the user
+        from app.core.security import create_access_token
+
+        access_token = create_access_token(subject=user.id)
+
+        # Convert user to response format
+        from app.schemas.user import UserResponse
+
+        user_data = UserResponse.from_orm(user).dict()
+
+        return OAuthCallbackResponse(
+            access_token=access_token, token_type="bearer", user=user_data
+        )
+
+    except ValueError as e:
+        # OAuth-specific errors (invalid state, code exchange failure, etc.)
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        # Unexpected errors
+        raise HTTPException(status_code=500, detail=f"OAuth callback failed: {str(e)}")
+
+
+async def _oauth_callback_get(
+    provider: str,
+    code: str,
+    state: str,
+    error: str | None,
+    error_description: str | None,
+    db: AsyncSession,
+):
+    """Handle browser OAuth redirects via GET callback."""
+    if error:
+        raise HTTPException(
+            status_code=400, detail=f"OAuth error: {error}. {error_description or ''}"
+        )
+
+    try:
+        callback_data = OAuthCallbackRequest(code=code, state=state)
+        result = await _oauth_callback(provider, callback_data, db)
+
+        return {
+            "message": "OAuth login successful",
+            "access_token": result.access_token,
+            "user": result.user,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"OAuth callback failed: {str(e)}")
+
+
+@router.get("/oauth/google/login", response_model=OAuthLoginResponse)
+async def google_oauth_login(db: AsyncSession = Depends(get_db)):
+    """Initiate Google OAuth login flow."""
+    return await _oauth_login(provider="google", db=db)
+
+
+@router.get("/oauth/github/login", response_model=OAuthLoginResponse)
+async def github_oauth_login(db: AsyncSession = Depends(get_db)):
+    """Initiate GitHub OAuth login flow."""
+    return await _oauth_login(provider="github", db=db)
+
+
+@router.post("/oauth/google/callback", response_model=OAuthCallbackResponse)
+async def google_oauth_callback(
+    callback_data: OAuthCallbackRequest, db: AsyncSession = Depends(get_db)
+):
+    """Handle Google OAuth callback."""
+    return await _oauth_callback(provider="google", callback_data=callback_data, db=db)
+
+
+@router.post("/oauth/github/callback", response_model=OAuthCallbackResponse)
+async def github_oauth_callback(
+    callback_data: OAuthCallbackRequest, db: AsyncSession = Depends(get_db)
+):
+    """Handle GitHub OAuth callback."""
+    return await _oauth_callback(provider="github", callback_data=callback_data, db=db)
+
+
+@router.get("/oauth/google/callback")
+async def google_oauth_callback_get(
+    code: str = Query(..., description="Authorization code from Google"),
+    state: str = Query(..., description="State parameter for CSRF protection"),
+    error: str = Query(None, description="Error from OAuth provider"),
+    error_description: str = Query(None, description="Error description"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Handle browser redirect callback for Google OAuth."""
+    return await _oauth_callback_get(
+        provider="google",
+        code=code,
+        state=state,
+        error=error,
+        error_description=error_description,
+        db=db,
+    )
+
+
+@router.get("/oauth/github/callback")
+async def github_oauth_callback_get(
+    code: str = Query(..., description="Authorization code from GitHub"),
+    state: str = Query(..., description="State parameter for CSRF protection"),
+    error: str = Query(None, description="Error from OAuth provider"),
+    error_description: str = Query(None, description="Error description"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Handle browser redirect callback for GitHub OAuth."""
+    return await _oauth_callback_get(
+        provider="github",
+        code=code,
+        state=state,
+        error=error,
+        error_description=error_description,
+        db=db,
+    )
