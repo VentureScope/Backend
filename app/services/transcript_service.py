@@ -82,6 +82,15 @@ class TranscriptService:
             user_id, self.MAX_VERSIONS
         )
 
+        # 7. Update user profile and regenerate embedding
+        from app.services.user_service import UserService
+        user_service = UserService(self.db)
+        user = await user_service.get_profile(user_id)
+        if user:
+            user.estudent_profile = self._generate_estudent_summary(data)
+            await user_service._update_user_embedding(user)
+            await self.db.commit()
+
         return transcript, versions_deleted, is_first_upload
 
     async def get_user_transcripts(self, user_id: str) -> List[AcademicTranscript]:
@@ -247,3 +256,24 @@ class TranscriptService:
                     grades.add(course.grade)
 
         return grades
+
+    def _generate_estudent_summary(self, data: TranscriptCreate) -> str:
+        semesters = data.transcript_data.semesters
+        if not semesters:
+            return "No transcript data available."
+        
+        latest_semester = semesters[-1]
+        cgpa = latest_semester.cumulative_summary.cgpa
+        total_credits = latest_semester.cumulative_summary.credit_hours
+        
+        courses = [c.code for s in semesters for c in s.courses]
+        unique_courses = list(dict.fromkeys(courses)) # preserve order, remove duplicates
+        
+        summary = f"Student ID: {data.transcript_data.student_id or 'Unknown'}. "
+        summary += f"Cumulative GPA: {cgpa}. "
+        summary += f"Total Credit Hours: {total_credits}. "
+        summary += f"Courses Taken: {', '.join(unique_courses[:20])}"
+        if len(unique_courses) > 20:
+            summary += "..."
+            
+        return summary

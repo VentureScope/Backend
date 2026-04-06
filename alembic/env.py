@@ -1,12 +1,9 @@
 import asyncio
 import os
 from logging.config import fileConfig
-<<<<<<< HEAD
 from dotenv import load_dotenv
 
 load_dotenv()
-=======
->>>>>>> 1d7982f04e8e0b87f239967dd1da56e0ffec77ea
 
 from sqlalchemy import pool
 from sqlalchemy.engine import Connection
@@ -25,7 +22,7 @@ if config.config_file_name is not None:
 
 # Import your models here for autogenerate support
 from app.core.database import Base
-from app.models.user import User  # Import all models
+from app.models import *  # Import all models
 
 # Set target metadata for autogenerate
 target_metadata = Base.metadata
