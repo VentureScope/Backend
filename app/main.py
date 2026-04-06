@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import health, auth, users, admin
+from app.api import health, auth, users, admin, transcript_configs, transcripts
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal
 from app.repositories.token_repository import TokenRepository
@@ -114,3 +114,5 @@ app.include_router(health.router, prefix="/api", tags=["health"])
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(users.router, prefix="/api/users", tags=["users"])
 app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
+app.include_router(transcript_configs.router)
+app.include_router(transcripts.router)
