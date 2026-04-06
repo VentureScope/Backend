@@ -138,17 +138,26 @@ Authorization: Bearer <your-jwt-token>
   ```
 
 #### OAuth Callback (GitHub)
-- **POST** `/api/auth/oauth/github/callback`
-- **Description**: Exchange GitHub authorization code for app access token
-- **Authentication**: None required
-- **Body**:
+ - **POST** `/api/auth/oauth/github/callback`
+ - **Description**: Exchange GitHub authorization code for app access token
+ - **Authentication**: None required
+ - **Body**:
   ```json
   {
     "code": "github-auth-code",
     "state": "secure-state-token"
   }
   ```
-- **Response**: Same as Google OAuth callback response format
+ - **Response**: Same as Google OAuth callback response format
+
+#### Sync GitHub Profile
+- **GET** `/api/users/me/github/sync`
+- **Description**: Sync GitHub repositories, language usage, topics, and contribution data for the authenticated user
+- **Authentication**: Required (Bearer token)
+- **Behavior**:
+  - If the user is not connected via GitHub OAuth, the response includes a GitHub authorization URL
+  - If the GitHub token is connected but missing required permissions, the response includes an updated authorization URL that requests broader scopes
+  - If permissions are sufficient, the endpoint syncs the GitHub profile, updates local user profile fields, and persists repository/contribution snapshot data linked to the user
 
 ### User Management (Self-Service)
 

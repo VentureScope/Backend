@@ -1,10 +1,13 @@
 """Integration tests for API endpoints."""
 
+import json
 import pytest
 from httpx import AsyncClient
 from unittest.mock import patch, AsyncMock
 
 from app.core.security import create_access_token
+from app.models.github_sync_snapshot import GitHubSyncSnapshot
+from app.models.oauth_account import OAuthAccount
 from app.models.user import User
 
 
@@ -300,6 +303,104 @@ class TestAuthEndpoints:
         assert data["status"] == "scope_upgrade_required"
         assert data["github_connected"] is True
         assert data["required_scopes"] == ["read:user", "user:email", "repo"]
+
+    @pytest.mark.asyncio
+    async def test_github_profile_sync_persists_snapshot(
+        self, client: AsyncClient, db_session
+    ):
+        """Test successful GitHub sync stores fetched payload in snapshot table."""
+        user = User(
+            id="8e529c0f-9b74-4dc7-89d3-30f3f6a1e901",
+            email="sync-persist@example.com",
+            password_hash="not-used",
+            full_name="Sync Persist",
+            role="professional",
+            is_active=True,
+            is_admin=False,
+        )
+        db_session.add(user)
+        await db_session.flush()
+
+        oauth_account = OAuthAccount(
+            user_id=user.id,
+            provider="github",
+            provider_account_id="136518123",
+            provider_email=user.email,
+            access_token="test-github-token",
+            provider_data=json.dumps(
+                {
+                    "profile": {"login": "syncpersist"},
+                    "granted_scopes": ["read:user", "user:email", "repo", "read:org"],
+                    "synced_at": "2026-04-06T20:30:00+00:00",
+                }
+            ),
+        )
+        db_session.add(oauth_account)
+        await db_session.commit()
+
+        token = create_access_token(subject=user.id)
+
+        with patch(
+            "app.services.oauth_service.OAuthService._fetch_github_profile_sync_data",
+            new=AsyncMock(
+                return_value={
+                    "github_username": "syncpersist",
+                    "full_name": "Sync Persist Updated",
+                    "profile_picture_url": "https://avatars.githubusercontent.com/u/136518123?v=4",
+                    "bio": "Testing snapshot persistence",
+                    "repositories": [
+                        {
+                            "name": "repo-a",
+                            "description": "test",
+                            "stargazer_count": 2,
+                            "fork_count": 1,
+                            "is_private": False,
+                            "is_fork": False,
+                            "pushed_at": "2026-04-06T20:30:00Z",
+                            "updated_at": "2026-04-06T20:30:00Z",
+                            "primary_language": "Python",
+                            "languages": [{"name": "Python", "size": 1000}],
+                            "topics": ["api"],
+                        }
+                    ],
+                    "contributions": {
+                        "total_contributions": 10,
+                        "total_pull_requests": 3,
+                        "total_issue_contributions": 2,
+                        "total_repositories_with_contributed_commits": 4,
+                    },
+                    "organizations": ["VentureScope"],
+                }
+            ),
+        ):
+            response = await client.get(
+                "/api/users/me/github/sync",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["status"] == "synced"
+        assert payload["github_username"] == "syncpersist"
+
+        snapshot_result = await db_session.get(GitHubSyncSnapshot, user.id)
+        if not snapshot_result:
+            from sqlalchemy import select
+
+            selected = await db_session.execute(
+                select(GitHubSyncSnapshot).where(GitHubSyncSnapshot.user_id == user.id)
+            )
+            snapshot_result = selected.scalar_one_or_none()
+
+        assert snapshot_result is not None
+        assert snapshot_result.github_username == "syncpersist"
+        repositories = json.loads(snapshot_result.repositories_json)
+        contributions = json.loads(snapshot_result.contributions_json)
+        organizations = json.loads(snapshot_result.organizations_json)
+
+        assert repositories[0]["name"] == "repo-a"
+        assert contributions["total_contributions"] == 10
+        assert organizations == ["VentureScope"]
 
 
 @pytest.mark.integration

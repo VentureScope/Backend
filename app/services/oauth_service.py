@@ -24,6 +24,7 @@ from app.core.config import settings
 from app.core.security import create_access_token
 from app.models.user import User
 from app.models.oauth_account import OAuthAccount
+from app.models.github_sync_snapshot import GitHubSyncSnapshot
 from app.repositories.user_repository import UserRepository
 
 
@@ -305,6 +306,25 @@ query ($username: String!) {
             "contributions": contributions,
             "organizations": organizations,
         }
+
+    async def _upsert_github_sync_snapshot(
+        self, user_id: str, profile: Dict[str, Any]
+    ) -> None:
+        """Persist latest GitHub sync payload for a user."""
+        existing = await self.db.execute(
+            select(GitHubSyncSnapshot).where(GitHubSyncSnapshot.user_id == user_id)
+        )
+        snapshot = existing.scalar_one_or_none()
+
+        if not snapshot:
+            snapshot = GitHubSyncSnapshot(user_id=user_id)
+            self.db.add(snapshot)
+
+        snapshot.github_username = profile.get("github_username")
+        snapshot.repositories_json = json.dumps(profile.get("repositories", []))
+        snapshot.contributions_json = json.dumps(profile.get("contributions", {}))
+        snapshot.organizations_json = json.dumps(profile.get("organizations", []))
+        snapshot.synced_at = datetime.now(timezone.utc)
 
     async def _fetch_user_info(
         self, client: httpx.AsyncClient, provider: str, access_token: str
@@ -773,6 +793,7 @@ query ($username: String!) {
             user.profile_picture_url = profile["profile_picture_url"]
 
         await self.user_repo.update(user)
+        await self._upsert_github_sync_snapshot(user_id=user_id, profile=profile)
 
         oauth_account.provider_data = json.dumps(
             {

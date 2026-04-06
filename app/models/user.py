@@ -3,12 +3,17 @@ AccountBase-equivalent: core user identity and auth (Data Dictionary).
 """
 
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 from sqlalchemy import String, DateTime, Boolean
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 import uuid
 import enum
 
 from app.core.database import Base
+
+if TYPE_CHECKING:
+    from app.models.oauth_account import OAuthAccount
+    from app.models.github_sync_snapshot import GitHubSyncSnapshot
 
 
 class UserRole(str, enum.Enum):
@@ -63,4 +68,10 @@ class User(Base):
     # Relationships
     oauth_accounts: Mapped[list["OAuthAccount"]] = relationship(
         "OAuthAccount", back_populates="user", cascade="all, delete-orphan"
+    )
+    github_sync_snapshot: Mapped["GitHubSyncSnapshot"] = relationship(
+        "GitHubSyncSnapshot",
+        back_populates="user",
+        cascade="all, delete-orphan",
+        uselist=False,
     )
