@@ -168,7 +168,6 @@ class TestAuthEndpoints:
             id="123e4567-e89b-12d3-a456-426614174000",
             email="oauth-user@example.com",
             full_name="OAuth User",
-            github_username="github-test-user",
             role="professional",
             is_active=True,
             is_admin=False,
@@ -188,7 +187,6 @@ class TestAuthEndpoints:
         assert data["token_type"] == "bearer"
         assert "access_token" in data
         assert data["user"]["email"] == "oauth-user@example.com"
-        assert data["user"]["github_username"] == "github-test-user"
 
     @pytest.mark.asyncio
     async def test_github_oauth_callback_error_from_provider(self, client: AsyncClient):
@@ -200,6 +198,108 @@ class TestAuthEndpoints:
 
         assert response.status_code == 400
         assert "OAuth error" in response.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_github_oauth_scope_upgrade(self, client: AsyncClient):
+        """Test GitHub OAuth scope-upgrade endpoint returns a fresh authorization URL."""
+        with patch(
+            "app.api.auth.OAuthService.get_authorization_url",
+            new=AsyncMock(
+                return_value=(
+                    "https://github.com/login/oauth/authorize?client_id=test&scope=repo",
+                    "upgrade_state_123",
+                )
+            ),
+        ):
+            response = await client.get(
+                "/api/auth/oauth/github/scope-upgrade",
+                params={"scopes": "read:user,user:email,repo"},
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["authorization_url"].startswith(
+            "https://github.com/login/oauth/authorize"
+        )
+        assert data["state"] == "upgrade_state_123"
+
+    @pytest.mark.asyncio
+    async def test_github_profile_sync_requires_oauth(self, client: AsyncClient, user_data):
+        """Test profile sync asks for GitHub OAuth when the user is not connected."""
+        register_response = await client.post("/api/auth/register", json=user_data)
+        assert register_response.status_code == 200
+
+        login_response = await client.post(
+            "/api/auth/login",
+            json={"email": user_data["email"], "password": user_data["password"]},
+        )
+        assert login_response.status_code == 200
+        token = login_response.json()["access_token"]
+
+        with patch(
+            "app.api.users.OAuthService.get_github_profile_sync_status",
+            new=AsyncMock(
+                return_value={
+                    "status": "authorization_required",
+                    "message": "Connect GitHub to sync profile data.",
+                    "github_connected": False,
+                    "required_scopes": ["read:user", "user:email", "repo"],
+                    "authorization_url": "https://github.com/login/oauth/authorize?client_id=test",
+                    "state": "sync_state_123",
+                    "repositories": [],
+                    "contributions": None,
+                }
+            ),
+        ):
+            response = await client.get(
+                "/api/users/me/github/sync",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "authorization_required"
+        assert data["github_connected"] is False
+        assert data["state"] == "sync_state_123"
+
+    @pytest.mark.asyncio
+    async def test_github_profile_sync_scope_upgrade(self, client: AsyncClient, user_data):
+        """Test profile sync returns an upgrade URL when repo scope is missing."""
+        register_response = await client.post("/api/auth/register", json=user_data)
+        assert register_response.status_code == 200
+
+        login_response = await client.post(
+            "/api/auth/login",
+            json={"email": user_data["email"], "password": user_data["password"]},
+        )
+        assert login_response.status_code == 200
+        token = login_response.json()["access_token"]
+
+        with patch(
+            "app.api.users.OAuthService.get_github_profile_sync_status",
+            new=AsyncMock(
+                return_value={
+                    "status": "scope_upgrade_required",
+                    "message": "GitHub access is connected, but repo-level permissions are required.",
+                    "github_connected": True,
+                    "required_scopes": ["read:user", "user:email", "repo"],
+                    "authorization_url": "https://github.com/login/oauth/authorize?client_id=test&scope=read:user+user:email+repo",
+                    "state": "upgrade_state_456",
+                    "repositories": [],
+                    "contributions": None,
+                }
+            ),
+        ):
+            response = await client.get(
+                "/api/users/me/github/sync",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "scope_upgrade_required"
+        assert data["github_connected"] is True
+        assert data["required_scopes"] == ["read:user", "user:email", "repo"]
 
 
 @pytest.mark.integration

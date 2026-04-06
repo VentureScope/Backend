@@ -18,7 +18,9 @@ from app.schemas.user import (
     PasswordChange,
     MessageResponse,
 )
+from app.schemas.oauth import GitHubProfileSyncResponse
 from app.services.user_service import UserService
+from app.services.oauth_service import OAuthService
 
 router = APIRouter()
 
@@ -107,3 +109,26 @@ async def delete_current_user_account(
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/me/github/sync", response_model=GitHubProfileSyncResponse)
+async def sync_github_profile(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """
+    Sync the current user's GitHub profile into VentureScope.
+
+    If the user is not connected via GitHub OAuth yet, the response includes
+    an authorization URL that starts the GitHub OAuth flow.
+    If the connected token is missing repo-level access, the response includes
+    an updated authorization URL to request broader scopes.
+    """
+    service = OAuthService(db)
+    try:
+        result = await service.get_github_profile_sync_status(current_user.id)
+        return GitHubProfileSyncResponse.model_validate(result)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"GitHub sync failed: {str(e)}")

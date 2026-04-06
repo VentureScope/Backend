@@ -47,6 +47,7 @@ class OAuthService:
     """
 
     SUPPORTED_PROVIDERS = {"google", "github"}
+    GITHUB_SYNC_REQUIRED_SCOPES = ["read:user", "user:email", "repo", "read:org"]
 
     def __init__(self, db: AsyncSession):
         self.db = db
@@ -84,6 +85,227 @@ class OAuthService:
             raise ValueError(f"Unsupported provider: {provider}")
         return self.provider_configs[provider]
 
+    def _normalize_scopes(self, provider: str, scopes: list[str] | None = None) -> list[str]:
+        """Return a deduplicated, ordered scope list for an OAuth provider."""
+        config = self._get_provider_config(provider)
+        raw_scopes = scopes if scopes is not None else config["scopes"]
+
+        normalized: list[str] = []
+        for scope in raw_scopes:
+            scope = scope.strip()
+            if scope and scope not in normalized:
+                normalized.append(scope)
+        return normalized
+
+    def _parse_provider_data(self, oauth_account: OAuthAccount | None) -> Dict[str, Any]:
+        """Safely parse provider_data JSON from an OAuth account."""
+        if not oauth_account or not oauth_account.provider_data:
+            return {}
+
+        try:
+            data = json.loads(oauth_account.provider_data)
+            if isinstance(data, dict):
+                return data
+        except json.JSONDecodeError:
+            pass
+
+        return {}
+
+    def _get_granted_scopes(self, oauth_account: OAuthAccount | None) -> list[str]:
+        data = self._parse_provider_data(oauth_account)
+        raw_scopes = data.get("granted_scopes", [])
+
+        if isinstance(raw_scopes, str):
+            raw_scopes = [scope.strip() for scope in raw_scopes.split(",") if scope.strip()]
+
+        if not isinstance(raw_scopes, list):
+            return []
+
+        return self._normalize_scopes("github", raw_scopes)
+
+    def _get_required_github_scopes(self) -> list[str]:
+        return self._normalize_scopes("github", self.GITHUB_SYNC_REQUIRED_SCOPES)
+
+    def _missing_scopes(self, granted_scopes: list[str], required_scopes: list[str]) -> list[str]:
+        granted = set(granted_scopes)
+        return [scope for scope in required_scopes if scope not in granted]
+
+    def _provider_data_payload(
+        self, user_info: Dict[str, Any], granted_scopes: list[str]
+    ) -> Dict[str, Any]:
+        return {
+            "profile": user_info,
+            "granted_scopes": granted_scopes,
+            "synced_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+    async def _get_github_oauth_account(self, user_id: str) -> OAuthAccount | None:
+        result = await self.db.execute(
+            select(OAuthAccount).where(
+                and_(
+                    OAuthAccount.user_id == user_id,
+                    OAuthAccount.provider == "github",
+                )
+            )
+        )
+        return result.scalar_one_or_none()
+
+    def _build_github_profile_query(self) -> str:
+        return """
+query ($username: String!) {
+  user(login: $username) {
+    login
+    name
+    bio
+    avatarUrl
+    repositories(first: 20, orderBy: {field: STARGAZERS, direction: DESC}) {
+      nodes {
+        name
+        description
+        stargazerCount
+        forkCount
+        isPrivate
+        isFork
+        updatedAt
+        pushedAt
+        primaryLanguage {
+          name
+        }
+        languages(first: 10, orderBy: {field: SIZE, direction: DESC}) {
+          edges {
+            size
+            node {
+              name
+            }
+          }
+        }
+        repositoryTopics(first: 10) {
+          nodes {
+            topic {
+              name
+            }
+          }
+        }
+      }
+    }
+    contributionsCollection {
+      contributionCalendar {
+        totalContributions
+      }
+      totalPullRequestContributions
+      totalIssueContributions
+      totalRepositoriesWithContributedCommits
+    }
+    organizations(first: 5) {
+      nodes {
+        name
+      }
+    }
+  }
+}
+""".strip()
+
+    def _normalize_github_repository(self, repo: Dict[str, Any]) -> Dict[str, Any]:
+        languages = []
+        for edge in repo.get("languages", {}).get("edges", []):
+            node = edge.get("node") or {}
+            if node.get("name"):
+                languages.append({"name": node["name"], "size": edge.get("size", 0)})
+
+        topics = []
+        for item in repo.get("repositoryTopics", {}).get("nodes", []):
+            topic = item.get("topic") or {}
+            if topic.get("name"):
+                topics.append(topic["name"])
+
+        return {
+            "name": repo.get("name"),
+            "description": repo.get("description"),
+            "stargazer_count": repo.get("stargazerCount", 0),
+            "fork_count": repo.get("forkCount", 0),
+            "is_private": repo.get("isPrivate", False),
+            "is_fork": repo.get("isFork", False),
+            "pushed_at": repo.get("pushedAt"),
+            "updated_at": repo.get("updatedAt"),
+            "primary_language": (repo.get("primaryLanguage") or {}).get("name"),
+            "languages": languages,
+            "topics": topics,
+        }
+
+    def _normalize_github_contributions(self, contributions: Dict[str, Any]) -> Dict[str, Any]:
+        calendar = contributions.get("contributionCalendar", {})
+        return {
+            "total_contributions": calendar.get("totalContributions", 0),
+            "total_pull_requests": contributions.get("totalPullRequestContributions", 0),
+            "total_issue_contributions": contributions.get("totalIssueContributions", 0),
+            "total_repositories_with_contributed_commits": contributions.get(
+                "totalRepositoriesWithContributedCommits", 0
+            ),
+        }
+
+    async def _fetch_github_profile_sync_data(
+        self, access_token: str, github_username: str
+    ) -> Dict[str, Any]:
+        query = self._build_github_profile_query()
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Accept": "application/json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
+
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "https://api.github.com/graphql",
+                json={"query": query, "variables": {"username": github_username}},
+                headers=headers,
+            )
+
+            if response.status_code in {401, 403}:
+                raise OAuthProviderError(
+                    "GitHub profile sync requires updated OAuth permissions"
+                )
+
+            response.raise_for_status()
+            payload = response.json()
+
+        if payload.get("errors"):
+            error_message = payload["errors"][0].get("message", "Unknown GitHub error")
+            if "not accessible" in error_message.lower() or "scope" in error_message.lower():
+                raise OAuthProviderError(
+                    "GitHub profile sync requires updated OAuth permissions"
+                )
+            raise OAuthProviderError(f"GitHub GraphQL request failed: {error_message}")
+
+        user = (payload.get("data") or {}).get("user")
+        if not user:
+            raise OAuthProviderError("GitHub user data was not returned")
+
+        repositories = [
+            self._normalize_github_repository(repo)
+            for repo in (user.get("repositories", {}).get("nodes", []) or [])
+            if repo
+        ]
+
+        contributions = self._normalize_github_contributions(
+            user.get("contributionsCollection", {})
+        )
+
+        organizations = [
+            item.get("name")
+            for item in (user.get("organizations", {}).get("nodes", []) or [])
+            if item and item.get("name")
+        ]
+
+        return {
+            "github_username": user.get("login") or github_username,
+            "full_name": user.get("name"),
+            "profile_picture_url": user.get("avatarUrl"),
+            "bio": user.get("bio"),
+            "repositories": repositories,
+            "contributions": contributions,
+            "organizations": organizations,
+        }
+
     async def _fetch_user_info(
         self, client: httpx.AsyncClient, provider: str, access_token: str
     ) -> Dict[str, Any]:
@@ -93,9 +315,7 @@ class OAuthService:
             "Accept": "application/json",
         }
 
-        userinfo_response = await client.get(
-            config["userinfo_endpoint"], headers=headers
-        )
+        userinfo_response = await client.get(config["userinfo_endpoint"], headers=headers)
         userinfo_response.raise_for_status()
         user_info = userinfo_response.json()
 
@@ -105,9 +325,7 @@ class OAuthService:
         # Normalize GitHub payload to internal format expected by the user creation flow.
         email = user_info.get("email")
         if not email:
-            emails_response = await client.get(
-                config["email_endpoint"], headers=headers
-            )
+            emails_response = await client.get(config["email_endpoint"], headers=headers)
             emails_response.raise_for_status()
             emails = emails_response.json()
 
@@ -122,9 +340,7 @@ class OAuthService:
             email = primary_email or verified_email
 
         if not email:
-            raise OAuthProviderError(
-                "GitHub account does not expose an accessible email"
-            )
+            raise OAuthProviderError("GitHub account does not expose an accessible email")
 
         return {
             "id": str(user_info["id"]),
@@ -197,7 +413,9 @@ class OAuthService:
         except (ValueError, TypeError) as e:
             raise OAuthStateError(f"State format invalid: {e}")
 
-    def generate_authorization_url(self, provider: str = "google") -> Dict[str, str]:
+    def generate_authorization_url(
+        self, provider: str = "google", scopes: list[str] | None = None
+    ) -> Dict[str, str]:
         """
         Generate OAuth authorization URL with PKCE and state.
 
@@ -219,7 +437,7 @@ class OAuthService:
         params = {
             "client_id": config["client_id"],
             "redirect_uri": config["redirect_uri"],
-            "scope": " ".join(config["scopes"]),
+            "scope": " ".join(self._normalize_scopes(provider, scopes)),
             "response_type": "code",
             "state": state,
         }
@@ -277,6 +495,11 @@ class OAuthService:
                         f"Token exchange failed: {tokens['error']}"
                     )
 
+                if provider == "github" and "scope" in tokens and isinstance(tokens["scope"], str):
+                    tokens["granted_scopes"] = [
+                        scope.strip() for scope in tokens["scope"].split(",") if scope.strip()
+                    ]
+
             except httpx.HTTPError as e:
                 raise OAuthProviderError(f"Failed to exchange code for tokens: {e}")
 
@@ -332,29 +555,29 @@ class OAuthService:
                     seconds=tokens["expires_in"]
                 )
 
-            oauth_account.provider_data = json.dumps(user_info)
-            oauth_account.updated_at = datetime.now(timezone.utc)
-
-            # Update GitHub username if provider is GitHub and username has changed
-            # IMPORTANT: Get user directly to avoid lazy loading relationship
-            if provider == "github" and user_info.get("provider_login"):
-                # Query user directly instead of using oauth_account.user relationship
-                user_result = await self.db.execute(
-                    select(User).where(User.id == oauth_account.user_id)
+            if provider == "github":
+                granted_scopes_from_token = self._normalize_scopes(
+                    "github", tokens.get("granted_scopes") or []
                 )
-                user = user_result.scalar_one()
-
-                if user.github_username != user_info.get("provider_login"):
-                    user.github_username = user_info.get("provider_login")
+                granted_scopes = (
+                    granted_scopes_from_token
+                    or self._get_granted_scopes(oauth_account)
+                    or self._get_required_github_scopes()
+                )
+                provider_data = self._provider_data_payload(
+                    user_info=user_info,
+                    granted_scopes=granted_scopes,
+                )
+                oauth_account.provider_data = json.dumps(provider_data)
+            else:
+                oauth_account.provider_data = json.dumps(user_info)
+            oauth_account.updated_at = datetime.now(timezone.utc)
 
             await self.db.commit()
             await self.db.refresh(oauth_account)
-
-            # Return the user by querying directly, not through relationship
-            user_result = await self.db.execute(
-                select(User).where(User.id == oauth_account.user_id)
-            )
-            user = user_result.scalar_one()
+            user = await self.user_repo.get_by_id(oauth_account.user_id)
+            if not user:
+                raise ValueError("Linked OAuth user not found")
             return user
 
         # Try to find user by email (account linking)
@@ -363,34 +586,26 @@ class OAuthService:
         if existing_user:
             # Link OAuth account to existing user
             user = existing_user
-            # Set GitHub username if this is GitHub OAuth and user doesn't have one
-            if (
-                provider == "github"
-                and user_info.get("provider_login")
-                and not user.github_username
-            ):
-                user.github_username = user_info.get("provider_login")
-                await self.db.flush()
         else:
-            # Create new user with GitHub username if it's GitHub OAuth
-            user_kwargs = {
-                "profile_picture_url": user_info.get("picture"),
-                "oauth_provider": provider,
-                "oauth_id": provider_id,
-                "email_verified": user_info.get("email_verified", True),
-            }
-
-            # Add GitHub username for GitHub OAuth
-            if provider == "github" and user_info.get("provider_login"):
-                user_kwargs["github_username"] = user_info.get("provider_login")
-
+            # Create new user
             user = await self.user_repo.create_oauth_user(
                 email=email,
                 full_name=user_info.get("name"),
-                **user_kwargs,
+                profile_picture_url=user_info.get("picture"),
+                oauth_provider=provider,
+                oauth_id=provider_id,
+                email_verified=user_info.get("email_verified", True),
             )
 
         # Create OAuth account record
+        granted_scopes = (
+            self._normalize_scopes(
+                "github", tokens.get("granted_scopes") or []
+            )
+            if provider == "github"
+            else []
+        )
+        provider_data = self._provider_data_payload(user_info=user_info, granted_scopes=granted_scopes)
         oauth_account = await self.user_repo.create_oauth_account(
             user=user,
             provider=provider,
@@ -399,8 +614,8 @@ class OAuthService:
             refresh_token=tokens.get("refresh_token"),
             token_expires_at=tokens.get("expires_in"),
             user_info=user_info,
+            provider_data=provider_data,
         )
-
         await self.db.commit()
         await self.db.refresh(user)
 
@@ -440,7 +655,6 @@ class OAuthService:
                 "id": user.id,
                 "email": user.email,
                 "full_name": user.full_name,
-                "github_username": user.github_username,
                 "profile_picture_url": user.profile_picture_url,
                 "is_active": user.is_active,
                 "email_verified": user.email_verified,
@@ -448,7 +662,9 @@ class OAuthService:
             },
         }
 
-    async def get_authorization_url(self, provider: str = "google") -> tuple[str, str]:
+    async def get_authorization_url(
+        self, provider: str = "google", scopes: list[str] | None = None
+    ) -> tuple[str, str]:
         """
         Generate OAuth authorization URL.
 
@@ -458,8 +674,140 @@ class OAuthService:
         Returns:
             Tuple of (authorization_url, state)
         """
-        auth_data = self.generate_authorization_url(provider=provider)
+        auth_data = self.generate_authorization_url(provider=provider, scopes=scopes)
         return auth_data["url"], auth_data["state"]
+
+    async def get_github_profile_sync_status(self, user_id: str) -> Dict[str, Any]:
+        """Return the current GitHub sync status for a user."""
+        oauth_account = await self._get_github_oauth_account(user_id)
+        required_scopes = self._get_required_github_scopes()
+
+        if not oauth_account or not oauth_account.access_token:
+            authorization_url, state = await self.get_authorization_url(
+                provider="github", scopes=required_scopes
+            )
+            return {
+                "status": "authorization_required",
+                "message": "Connect GitHub to sync repository, language, and contribution data.",
+                "github_connected": False,
+                "required_scopes": required_scopes,
+                "authorization_url": authorization_url,
+                "state": state,
+                "repositories": [],
+                "contributions": None,
+            }
+
+        if oauth_account.token_expires_at and oauth_account.token_expires_at < datetime.now(timezone.utc):
+            authorization_url, state = await self.get_authorization_url(
+                provider="github", scopes=required_scopes
+            )
+            return {
+                "status": "authorization_required",
+                "message": "GitHub token has expired. Reconnect to continue syncing.",
+                "github_connected": False,
+                "required_scopes": required_scopes,
+                "authorization_url": authorization_url,
+                "state": state,
+                "repositories": [],
+                "contributions": None,
+            }
+
+        granted_scopes = self._get_granted_scopes(oauth_account)
+        missing_scopes = self._missing_scopes(granted_scopes, required_scopes)
+        if missing_scopes:
+            authorization_url, state = await self.get_authorization_url(
+                provider="github", scopes=required_scopes
+            )
+            return {
+                "status": "scope_upgrade_required",
+                "message": "GitHub access is connected, but repo-level permissions are required for full sync.",
+                "github_connected": True,
+                "required_scopes": required_scopes,
+                "authorization_url": authorization_url,
+                "state": state,
+                "repositories": [],
+                "contributions": None,
+            }
+
+        provider_data = self._parse_provider_data(oauth_account)
+        github_login = (
+            provider_data.get("profile", {}).get("login")
+            or provider_data.get("profile", {}).get("provider_login")
+            or provider_data.get("provider_login")
+            or provider_data.get("login")
+            or provider_data.get("profile", {}).get("name")
+            or provider_data.get("profile", {}).get("email")
+            or ""
+        )
+
+        try:
+            profile = await self._fetch_github_profile_sync_data(
+                access_token=oauth_account.access_token,
+                github_username=github_login,
+            )
+        except OAuthProviderError as e:
+            if "updated OAuth permissions" in str(e):
+                authorization_url, state = await self.get_authorization_url(
+                    provider="github", scopes=required_scopes
+                )
+                return {
+                    "status": "scope_upgrade_required",
+                    "message": "GitHub access is connected, but repo-level permissions are required for full sync.",
+                    "github_connected": True,
+                    "required_scopes": required_scopes,
+                    "authorization_url": authorization_url,
+                    "state": state,
+                    "repositories": [],
+                    "contributions": None,
+                }
+            raise
+
+        user = await self.user_repo.get_by_id(user_id)
+        if not user:
+            raise ValueError("User not found")
+
+        user.github_username = profile["github_username"]
+        if profile.get("full_name"):
+            user.full_name = profile["full_name"]
+        if profile.get("profile_picture_url"):
+            user.profile_picture_url = profile["profile_picture_url"]
+
+        await self.user_repo.update(user)
+
+        oauth_account.provider_data = json.dumps(
+            {
+                "profile": {
+                    "login": profile["github_username"],
+                    "name": profile.get("full_name"),
+                    "avatar_url": profile.get("profile_picture_url"),
+                    "bio": profile.get("bio"),
+                },
+                "granted_scopes": granted_scopes,
+                "synced_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+        await self.db.flush()
+        await self.db.commit()
+
+        return {
+            "status": "synced",
+            "message": "GitHub profile synced successfully.",
+            "github_connected": True,
+            "github_username": profile["github_username"],
+            "full_name": profile.get("full_name"),
+            "profile_picture_url": profile.get("profile_picture_url"),
+            "required_scopes": required_scopes,
+            "repositories": profile.get("repositories", []),
+            "contributions": profile.get("contributions"),
+        }
+
+    async def request_github_scope_upgrade(self) -> tuple[str, str, list[str]]:
+        """Return a GitHub OAuth URL that requests the sync scopes."""
+        required_scopes = self._get_required_github_scopes()
+        authorization_url, state = await self.get_authorization_url(
+            provider="github", scopes=required_scopes
+        )
+        return authorization_url, state, required_scopes
 
     async def authenticate_user(
         self, provider: str, code: str, state: str
@@ -490,8 +838,6 @@ class OAuthService:
         # Determine if this is a new user (created in this session)
         # We can check if the user was created recently (within last minute)
         now = datetime.now(timezone.utc)
-        is_new_user = (
-            user.created_at is not None and (now - user.created_at).total_seconds() < 60
-        )
+        is_new_user = (now - user.created_at).total_seconds() < 60
 
         return user, is_new_user

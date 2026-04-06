@@ -8,8 +8,6 @@ VentureScope Backend provides a RESTful API for user authentication, user manage
 - **Production**: TBD
 
 ## Authentication
-The API uses JWT (JSON Web Token) bearer authentication for protected endpoints.
-
 ### Token Usage
 ```
 Authorization: Bearer <your-jwt-token>

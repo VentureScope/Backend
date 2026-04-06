@@ -116,6 +116,7 @@ class UserRepository:
         refresh_token: str | None = None,
         token_expires_at: int | None = None,
         user_info: dict | None = None,
+        provider_data: dict | None = None,
     ) -> OAuthAccount:
         """Create a new OAuth account for a user."""
         # Calculate token expiration datetime if expires_in seconds provided
@@ -133,7 +134,7 @@ class UserRepository:
             access_token=access_token,
             refresh_token=refresh_token,
             token_expires_at=token_expires_datetime,
-            provider_data=json.dumps(user_info or {}),
+            provider_data=json.dumps(provider_data or user_info or {}),
         )
         self.db.add(oauth_account)
         await self.db.flush()

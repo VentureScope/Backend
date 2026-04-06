@@ -117,30 +117,19 @@ async def _oauth_callback(
 
         access_token = create_access_token(subject=user.id)
 
-        # Convert user to response format manually to avoid relationship loading issues
-        user_data = {
-            "id": user.id,
-            "email": user.email,
-            "full_name": user.full_name,
-            "github_username": user.github_username,
-            "career_interest": user.career_interest,
-            "role": user.role,
-            "is_active": user.is_active,
-            "is_admin": user.is_admin,
-        }
+        # Convert user to response format
+        from app.schemas.user import UserResponse
 
-        response = OAuthCallbackResponse(
+        user_data = UserResponse.from_orm(user).dict()
+
+        return OAuthCallbackResponse(
             access_token=access_token, token_type="bearer", user=user_data
         )
-        return response
 
     except ValueError as e:
         # OAuth-specific errors (invalid state, code exchange failure, etc.)
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        import traceback
-
-        traceback.print_exc()
         # Unexpected errors
         raise HTTPException(status_code=500, detail=f"OAuth callback failed: {str(e)}")
 
@@ -185,6 +174,23 @@ async def google_oauth_login(db: AsyncSession = Depends(get_db)):
 async def github_oauth_login(db: AsyncSession = Depends(get_db)):
     """Initiate GitHub OAuth login flow."""
     return await _oauth_login(provider="github", db=db)
+
+
+@router.get("/oauth/github/scope-upgrade", response_model=OAuthLoginResponse)
+async def github_oauth_scope_upgrade(
+    scopes: str = Query(
+        "read:user,user:email,repo,read:org",
+        description="Comma-separated GitHub scopes to request",
+    ),
+    db: AsyncSession = Depends(get_db),
+):
+    """Request an updated GitHub OAuth authorization with repo-level scopes."""
+    requested_scopes = [scope.strip() for scope in scopes.split(",") if scope.strip()]
+    oauth_service = OAuthService(db)
+    auth_url, state = await oauth_service.get_authorization_url(
+        provider="github", scopes=requested_scopes
+    )
+    return OAuthLoginResponse(authorization_url=auth_url, state=state)
 
 
 @router.post("/oauth/google/callback", response_model=OAuthCallbackResponse)
