@@ -402,6 +402,69 @@ class TestAuthEndpoints:
         assert contributions["total_contributions"] == 10
         assert organizations == ["VentureScope"]
 
+    @pytest.mark.asyncio
+    async def test_get_github_synced_data_not_found(
+        self, client: AsyncClient, user_data
+    ):
+        """Test synced-data endpoint returns 404 if no snapshot exists."""
+        register_response = await client.post("/api/auth/register", json=user_data)
+        assert register_response.status_code == 200
+
+        login_response = await client.post(
+            "/api/auth/login",
+            json={"email": user_data["email"], "password": user_data["password"]},
+        )
+        assert login_response.status_code == 200
+        token = login_response.json()["access_token"]
+
+        response = await client.get(
+            "/api/users/me/github/synced-data",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        assert response.status_code == 404
+        assert "No GitHub synced data found" in response.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_get_github_synced_data_success(self, client: AsyncClient, db_session):
+        """Test synced-data endpoint returns persisted snapshot data."""
+        user = User(
+            id="4f7b64c5-6f4b-4f9d-9e6a-f5f6fd0d4de2",
+            email="synced-data@example.com",
+            password_hash="not-used",
+            full_name="Synced Data",
+            role="professional",
+            is_active=True,
+            is_admin=False,
+        )
+        db_session.add(user)
+        await db_session.flush()
+
+        snapshot = GitHubSyncSnapshot(
+            user_id=user.id,
+            github_username="octocat",
+            repositories_json='[{"name":"repo1","languages":[{"name":"Python","size":1000}],"topics":["api"]}]',
+            contributions_json='{"total_contributions":42,"total_pull_requests":7,"total_issue_contributions":3,"total_repositories_with_contributed_commits":2}',
+            organizations_json='["GitHub"]',
+        )
+        db_session.add(snapshot)
+        await db_session.commit()
+
+        token = create_access_token(subject=user.id)
+        response = await client.get(
+            "/api/users/me/github/synced-data",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["github_username"] == "octocat"
+        assert payload["repositories"][0]["name"] == "repo1"
+        assert payload["repositories"][0]["languages"][0]["name"] == "Python"
+        assert payload["contributions"]["total_contributions"] == 42
+        assert payload["organizations"] == ["GitHub"]
+        assert payload["synced_at"] is not None
+
 
 @pytest.mark.integration
 class TestUserEndpoints:

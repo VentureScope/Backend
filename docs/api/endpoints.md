@@ -159,6 +159,32 @@ Authorization: Bearer <your-jwt-token>
   - If the GitHub token is connected but missing required permissions, the response includes an updated authorization URL that requests broader scopes
   - If permissions are sufficient, the endpoint syncs the GitHub profile, updates local user profile fields, and persists repository/contribution snapshot data linked to the user
 
+#### Get Synced GitHub Data
+- **GET** `/api/users/me/github/synced-data`
+- **Description**: Return the most recently persisted GitHub sync snapshot from the database for the authenticated user
+- **Authentication**: Required (Bearer token)
+- **Response**:
+  ```json
+  {
+    "github_username": "octocat",
+    "repositories": [
+      {
+        "name": "repo1",
+        "languages": [{"name": "Python", "percentage": 100.0}],
+        "topics": ["api"]
+      }
+    ],
+    "contributions": {
+      "total_commits": 42,
+      "pull_requests": 7,
+      "issues": 3
+    },
+    "organizations": ["GitHub"],
+    "synced_at": "2026-04-07T09:31:12.123456+00:00"
+  }
+  ```
+- **Error (404)**: Returned when no synced snapshot exists yet (run `/api/users/me/github/sync` first)
+
 ### User Management (Self-Service)
 
 #### Get Current User

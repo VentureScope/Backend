@@ -88,3 +88,15 @@ class GitHubProfileSyncResponse(BaseModel):
     state: str | None = None
     repositories: list[GitHubRepositorySummary] = Field(default_factory=list)
     contributions: GitHubContributionSummary | None = None
+
+
+class GitHubSyncedDataResponse(BaseModel):
+    """Persisted GitHub sync data fetched from the database."""
+
+    github_username: str | None = None
+    repositories: list[GitHubRepositorySummary] = Field(default_factory=list)
+    contributions: GitHubContributionSummary = Field(
+        default_factory=GitHubContributionSummary
+    )
+    organizations: list[str] = Field(default_factory=list)
+    synced_at: str
