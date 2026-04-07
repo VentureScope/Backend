@@ -89,6 +89,9 @@ When adding documentation:
 
 **Current Documentation:**
 
+### API Endpoints
+- [Real-Time WebSocket Chat](api/chat.md) - How to use the WebSockets, session management, and RAG architectures
+
 ### Testing
 - [Testing Strategy](testing/strategy.md) - Testing approach, guidelines, and infrastructure
 - [Test Commands](testing/commands.md) - How to run tests in Docker environment

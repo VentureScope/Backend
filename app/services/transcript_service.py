@@ -84,12 +84,19 @@ class TranscriptService:
 
         # 7. Update user profile and regenerate embedding
         from app.services.user_service import UserService
+        from app.services.knowledge_service import KnowledgeService
+        
         user_service = UserService(self.db)
         user = await user_service.get_profile(user_id)
         if user:
             user.estudent_profile = self._generate_estudent_summary(data)
             await user_service._update_user_embedding(user)
             await self.db.commit()
+
+        # 8. Update Knowledge Base chunks
+        knowledge_service = KnowledgeService(self.db)
+        chunks = self._generate_transcript_chunks(data)
+        await knowledge_service.replace_user_knowledge(user_id, chunks, source_type="transcript_course")
 
         return transcript, versions_deleted, is_first_upload
 
@@ -277,3 +284,17 @@ class TranscriptService:
             summary += "..."
             
         return summary
+
+    def _generate_transcript_chunks(self, data: TranscriptCreate) -> list[str]:
+        semesters = data.transcript_data.semesters
+        chunks = []
+        for semester in semesters:
+            sem_title = f"{semester.academic_year} {semester.semester}"
+            for course in semester.courses:
+                chunk = f"Course: {course.code} - {course.title} ({sem_title}). Credits: {course.credit_hours}. Grade: {course.grade}. Points: {course.points}."
+                chunks.append(chunk)
+            
+            # Semester summary chunk
+            summary = semester.semester_summary
+            chunks.append(f"Semester Summary for {sem_title}: SGPA={summary.sgpa}, CrHrs={summary.credit_hours}, Pts={summary.points}.")
+        return chunks

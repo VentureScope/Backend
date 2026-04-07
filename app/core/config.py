@@ -191,6 +191,11 @@ class Settings(BaseSettings):
     EMBEDDING_MODEL_NAME: str = "all-MiniLM-L6-v2"
     EMBEDDING_DIMENSIONS: int = 1536
 
+    # Chat / LLM completions
+    CHAT_MODEL_NAME: str = "gpt-4o-mini"
+    CHAT_MAX_TOKENS: int = 800
+    CHAT_TEMPERATURE: float = 0.7
+
     class Config:
         env_file = ".env"
         extra = "ignore"

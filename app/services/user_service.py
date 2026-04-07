@@ -20,6 +20,9 @@ class UserService:
         self.db = db
         self.repo = UserRepository(db)
         self.embedding_service = get_embedding_service()
+        
+        from app.services.knowledge_service import KnowledgeService
+        self.knowledge_service = KnowledgeService(db)
 
     # ==================== Helper Operations ====================
 
@@ -33,6 +36,17 @@ class UserService:
             estudent_profile=user.estudent_profile
         )
         user.embedding = self.embedding_service.generate_embedding(doc)
+
+        # Update knowledge base with individual profile fields
+        chunks = []
+        if user.career_interest:
+            chunks.append(f"Career Interest & Goals: {user.career_interest}")
+        if github_profile_desc:
+            chunks.append(f"GitHub Profile & Projects: {github_profile_desc}")
+            
+        await self.knowledge_service.replace_user_knowledge(
+            user.id, chunks, source_type="profile"
+        )
 
     # ==================== Self-Service Operations ====================
 
