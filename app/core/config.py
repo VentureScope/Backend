@@ -63,7 +63,7 @@ class Settings(BaseSettings):
 
     # OAuth scope configuration
     GOOGLE_OAUTH_SCOPES: List[str] = ["openid", "email", "profile"]
-    GITHUB_OAUTH_SCOPES: List[str] = ["read:user", "user:email"]
+    GITHUB_OAUTH_SCOPES: List[str] = ["read:user", "user:email", "repo"]
 
     # Environment setting
     ENVIRONMENT: str = "development"  # development, staging, production

@@ -8,8 +8,6 @@ VentureScope Backend provides a RESTful API for user authentication, user manage
 - **Production**: TBD
 
 ## Authentication
-The API uses JWT (JSON Web Token) bearer authentication for protected endpoints.
-
 ### Token Usage
 ```
 Authorization: Bearer <your-jwt-token>
@@ -140,17 +138,52 @@ Authorization: Bearer <your-jwt-token>
   ```
 
 #### OAuth Callback (GitHub)
-- **POST** `/api/auth/oauth/github/callback`
-- **Description**: Exchange GitHub authorization code for app access token
-- **Authentication**: None required
-- **Body**:
+ - **POST** `/api/auth/oauth/github/callback`
+ - **Description**: Exchange GitHub authorization code for app access token
+ - **Authentication**: None required
+ - **Body**:
   ```json
   {
     "code": "github-auth-code",
     "state": "secure-state-token"
   }
   ```
-- **Response**: Same as Google OAuth callback response format
+ - **Response**: Same as Google OAuth callback response format
+
+#### Sync GitHub Profile
+- **GET** `/api/users/me/github/sync`
+- **Description**: Sync GitHub repositories, language usage, topics, and contribution data for the authenticated user
+- **Authentication**: Required (Bearer token)
+- **Behavior**:
+  - If the user is not connected via GitHub OAuth, the response includes a GitHub authorization URL
+  - If the GitHub token is connected but missing required permissions, the response includes an updated authorization URL that requests broader scopes
+  - If permissions are sufficient, the endpoint syncs the GitHub profile, updates local user profile fields, and persists repository/contribution snapshot data linked to the user
+
+#### Get Synced GitHub Data
+- **GET** `/api/users/me/github/synced-data`
+- **Description**: Return the most recently persisted GitHub sync snapshot from the database for the authenticated user
+- **Authentication**: Required (Bearer token)
+- **Response**:
+  ```json
+  {
+    "github_username": "octocat",
+    "repositories": [
+      {
+        "name": "repo1",
+        "languages": [{"name": "Python", "percentage": 100.0}],
+        "topics": ["api"]
+      }
+    ],
+    "contributions": {
+      "total_commits": 42,
+      "pull_requests": 7,
+      "issues": 3
+    },
+    "organizations": ["GitHub"],
+    "synced_at": "2026-04-07T09:31:12.123456+00:00"
+  }
+  ```
+- **Error (404)**: Returned when no synced snapshot exists yet (run `/api/users/me/github/sync` first)
 
 ### User Management (Self-Service)
 

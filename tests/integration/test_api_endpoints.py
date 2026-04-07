@@ -1,10 +1,13 @@
 """Integration tests for API endpoints."""
 
+import json
 import pytest
 from httpx import AsyncClient
 from unittest.mock import patch, AsyncMock
 
 from app.core.security import create_access_token
+from app.models.github_sync_snapshot import GitHubSyncSnapshot
+from app.models.oauth_account import OAuthAccount
 from app.models.user import User
 
 
@@ -168,7 +171,6 @@ class TestAuthEndpoints:
             id="123e4567-e89b-12d3-a456-426614174000",
             email="oauth-user@example.com",
             full_name="OAuth User",
-            github_username="github-test-user",
             role="professional",
             is_active=True,
             is_admin=False,
@@ -188,7 +190,6 @@ class TestAuthEndpoints:
         assert data["token_type"] == "bearer"
         assert "access_token" in data
         assert data["user"]["email"] == "oauth-user@example.com"
-        assert data["user"]["github_username"] == "github-test-user"
 
     @pytest.mark.asyncio
     async def test_github_oauth_callback_error_from_provider(self, client: AsyncClient):
@@ -200,6 +201,269 @@ class TestAuthEndpoints:
 
         assert response.status_code == 400
         assert "OAuth error" in response.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_github_oauth_scope_upgrade(self, client: AsyncClient):
+        """Test GitHub OAuth scope-upgrade endpoint returns a fresh authorization URL."""
+        with patch(
+            "app.api.auth.OAuthService.get_authorization_url",
+            new=AsyncMock(
+                return_value=(
+                    "https://github.com/login/oauth/authorize?client_id=test&scope=repo",
+                    "upgrade_state_123",
+                )
+            ),
+        ):
+            response = await client.get(
+                "/api/auth/oauth/github/scope-upgrade",
+                params={"scopes": "read:user,user:email,repo"},
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["authorization_url"].startswith(
+            "https://github.com/login/oauth/authorize"
+        )
+        assert data["state"] == "upgrade_state_123"
+
+    @pytest.mark.asyncio
+    async def test_github_profile_sync_requires_oauth(self, client: AsyncClient, user_data):
+        """Test profile sync asks for GitHub OAuth when the user is not connected."""
+        register_response = await client.post("/api/auth/register", json=user_data)
+        assert register_response.status_code == 200
+
+        login_response = await client.post(
+            "/api/auth/login",
+            json={"email": user_data["email"], "password": user_data["password"]},
+        )
+        assert login_response.status_code == 200
+        token = login_response.json()["access_token"]
+
+        with patch(
+            "app.api.users.OAuthService.get_github_profile_sync_status",
+            new=AsyncMock(
+                return_value={
+                    "status": "authorization_required",
+                    "message": "Connect GitHub to sync profile data.",
+                    "github_connected": False,
+                    "required_scopes": ["read:user", "user:email", "repo"],
+                    "authorization_url": "https://github.com/login/oauth/authorize?client_id=test",
+                    "state": "sync_state_123",
+                    "repositories": [],
+                    "contributions": None,
+                }
+            ),
+        ):
+            response = await client.get(
+                "/api/users/me/github/sync",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "authorization_required"
+        assert data["github_connected"] is False
+        assert data["state"] == "sync_state_123"
+
+    @pytest.mark.asyncio
+    async def test_github_profile_sync_scope_upgrade(self, client: AsyncClient, user_data):
+        """Test profile sync returns an upgrade URL when repo scope is missing."""
+        register_response = await client.post("/api/auth/register", json=user_data)
+        assert register_response.status_code == 200
+
+        login_response = await client.post(
+            "/api/auth/login",
+            json={"email": user_data["email"], "password": user_data["password"]},
+        )
+        assert login_response.status_code == 200
+        token = login_response.json()["access_token"]
+
+        with patch(
+            "app.api.users.OAuthService.get_github_profile_sync_status",
+            new=AsyncMock(
+                return_value={
+                    "status": "scope_upgrade_required",
+                    "message": "GitHub access is connected, but repo-level permissions are required.",
+                    "github_connected": True,
+                    "required_scopes": ["read:user", "user:email", "repo"],
+                    "authorization_url": "https://github.com/login/oauth/authorize?client_id=test&scope=read:user+user:email+repo",
+                    "state": "upgrade_state_456",
+                    "repositories": [],
+                    "contributions": None,
+                }
+            ),
+        ):
+            response = await client.get(
+                "/api/users/me/github/sync",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "scope_upgrade_required"
+        assert data["github_connected"] is True
+        assert data["required_scopes"] == ["read:user", "user:email", "repo"]
+
+    @pytest.mark.asyncio
+    async def test_github_profile_sync_persists_snapshot(
+        self, client: AsyncClient, db_session
+    ):
+        """Test successful GitHub sync stores fetched payload in snapshot table."""
+        user = User(
+            id="8e529c0f-9b74-4dc7-89d3-30f3f6a1e901",
+            email="sync-persist@example.com",
+            password_hash="not-used",
+            full_name="Sync Persist",
+            role="professional",
+            is_active=True,
+            is_admin=False,
+        )
+        db_session.add(user)
+        await db_session.flush()
+
+        oauth_account = OAuthAccount(
+            user_id=user.id,
+            provider="github",
+            provider_account_id="136518123",
+            provider_email=user.email,
+            access_token="test-github-token",
+            provider_data=json.dumps(
+                {
+                    "profile": {"login": "syncpersist"},
+                    "granted_scopes": ["read:user", "user:email", "repo", "read:org"],
+                    "synced_at": "2026-04-06T20:30:00+00:00",
+                }
+            ),
+        )
+        db_session.add(oauth_account)
+        await db_session.commit()
+
+        token = create_access_token(subject=user.id)
+
+        with patch(
+            "app.services.oauth_service.OAuthService._fetch_github_profile_sync_data",
+            new=AsyncMock(
+                return_value={
+                    "github_username": "syncpersist",
+                    "full_name": "Sync Persist Updated",
+                    "profile_picture_url": "https://avatars.githubusercontent.com/u/136518123?v=4",
+                    "bio": "Testing snapshot persistence",
+                    "repositories": [
+                        {
+                            "name": "repo-a",
+                            "description": "test",
+                            "stargazer_count": 2,
+                            "fork_count": 1,
+                            "is_private": False,
+                            "is_fork": False,
+                            "pushed_at": "2026-04-06T20:30:00Z",
+                            "updated_at": "2026-04-06T20:30:00Z",
+                            "primary_language": "Python",
+                            "languages": [{"name": "Python", "size": 1000}],
+                            "topics": ["api"],
+                        }
+                    ],
+                    "contributions": {
+                        "total_contributions": 10,
+                        "total_pull_requests": 3,
+                        "total_issue_contributions": 2,
+                        "total_repositories_with_contributed_commits": 4,
+                    },
+                    "organizations": ["VentureScope"],
+                }
+            ),
+        ):
+            response = await client.get(
+                "/api/users/me/github/sync",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["status"] == "synced"
+        assert payload["github_username"] == "syncpersist"
+
+        snapshot_result = await db_session.get(GitHubSyncSnapshot, user.id)
+        if not snapshot_result:
+            from sqlalchemy import select
+
+            selected = await db_session.execute(
+                select(GitHubSyncSnapshot).where(GitHubSyncSnapshot.user_id == user.id)
+            )
+            snapshot_result = selected.scalar_one_or_none()
+
+        assert snapshot_result is not None
+        assert snapshot_result.github_username == "syncpersist"
+        repositories = json.loads(snapshot_result.repositories_json)
+        contributions = json.loads(snapshot_result.contributions_json)
+        organizations = json.loads(snapshot_result.organizations_json)
+
+        assert repositories[0]["name"] == "repo-a"
+        assert contributions["total_contributions"] == 10
+        assert organizations == ["VentureScope"]
+
+    @pytest.mark.asyncio
+    async def test_get_github_synced_data_not_found(
+        self, client: AsyncClient, user_data
+    ):
+        """Test synced-data endpoint returns 404 if no snapshot exists."""
+        register_response = await client.post("/api/auth/register", json=user_data)
+        assert register_response.status_code == 200
+
+        login_response = await client.post(
+            "/api/auth/login",
+            json={"email": user_data["email"], "password": user_data["password"]},
+        )
+        assert login_response.status_code == 200
+        token = login_response.json()["access_token"]
+
+        response = await client.get(
+            "/api/users/me/github/synced-data",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        assert response.status_code == 404
+        assert "No GitHub synced data found" in response.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_get_github_synced_data_success(self, client: AsyncClient, db_session):
+        """Test synced-data endpoint returns persisted snapshot data."""
+        user = User(
+            id="4f7b64c5-6f4b-4f9d-9e6a-f5f6fd0d4de2",
+            email="synced-data@example.com",
+            password_hash="not-used",
+            full_name="Synced Data",
+            role="professional",
+            is_active=True,
+            is_admin=False,
+        )
+        db_session.add(user)
+        await db_session.flush()
+
+        snapshot = GitHubSyncSnapshot(
+            user_id=user.id,
+            github_username="octocat",
+            repositories_json='[{"name":"repo1","languages":[{"name":"Python","size":1000}],"topics":["api"]}]',
+            contributions_json='{"total_contributions":42,"total_pull_requests":7,"total_issue_contributions":3,"total_repositories_with_contributed_commits":2}',
+            organizations_json='["GitHub"]',
+        )
+        db_session.add(snapshot)
+        await db_session.commit()
+
+        token = create_access_token(subject=user.id)
+        response = await client.get(
+            "/api/users/me/github/synced-data",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["github_username"] == "octocat"
+        assert payload["repositories"][0]["name"] == "repo1"
+        assert payload["repositories"][0]["languages"][0]["name"] == "Python"
+        assert payload["contributions"]["total_contributions"] == 42
+        assert payload["organizations"] == ["GitHub"]
+        assert payload["synced_at"] is not None
 
 
 @pytest.mark.integration

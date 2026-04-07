@@ -6,6 +6,7 @@ from app.models.transcript_config import TranscriptConfig
 from app.models.chat import ChatSession, ChatMessage
 from app.models.notification import Notification
 from app.models.user_knowledge import UserKnowledge
+from app.models.github_sync_snapshot import GitHubSyncSnapshot
 
 __all__ = [
     "User",
@@ -17,4 +18,7 @@ __all__ = [
     "ChatMessage",
     "Notification",
     "UserKnowledge",
+    "GitHubSyncSnapshot",
 ]
+
+
