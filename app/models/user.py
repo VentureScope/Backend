@@ -4,7 +4,7 @@ AccountBase-equivalent: core user identity and auth (Data Dictionary).
 
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
-from sqlalchemy import String, DateTime, Boolean
+from sqlalchemy import String, DateTime, Boolean, JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 import uuid
 import enum
@@ -44,6 +44,8 @@ class User(Base):
     )  # For OAuth profile images
     github_username: Mapped[str | None] = mapped_column(String(255), nullable=True)
     career_interest: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    skills: Mapped[list | None] = mapped_column(JSON, nullable=True)  # List of skill strings
+    cv_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)  # S3 URL for CV
     estudent_profile: Mapped[str | None] = mapped_column(String(1000), nullable=True)  # E-student summarized profile
     
     # Store generated similarity embedding using pgvector

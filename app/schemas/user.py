@@ -14,6 +14,7 @@ class UserCreate(BaseModel):
     full_name: str | None = None
     github_username: str | None = None
     career_interest: str | None = None
+    skills: list[str] | None = None
     role: RoleType = "professional"
 
 
@@ -23,6 +24,8 @@ class UserResponse(BaseModel):
     full_name: str | None
     github_username: str | None
     career_interest: str | None
+    skills: list[str] | None
+    cv_url: str | None
     estudent_profile: str | None
     role: str
     is_active: bool
@@ -51,10 +54,24 @@ class UserUpdate(BaseModel):
     full_name: str | None = None
     github_username: str | None = None
     career_interest: str | None = None
+    skills: list[str] | None = None
     estudent_profile: str | None = None
 
     class Config:
         from_attributes = True
+
+
+class SkillsUpdate(BaseModel):
+    """Schema for updating user skills."""
+
+    skills: list[str] = Field(..., min_length=1, description="List of skills")
+
+
+class CVUploadResponse(BaseModel):
+    """Schema for CV upload response."""
+
+    cv_url: str
+    message: str
 
 
 class PasswordChange(BaseModel):
@@ -72,6 +89,8 @@ class UserAdminUpdate(BaseModel):
     full_name: str | None = None
     github_username: str | None = None
     career_interest: str | None = None
+    skills: list[str] | None = None
+    cv_url: str | None = None
     estudent_profile: str | None = None
     role: RoleType | None = None
     is_active: bool | None = None

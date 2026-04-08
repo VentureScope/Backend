@@ -196,6 +196,13 @@ class Settings(BaseSettings):
     CHAT_MAX_TOKENS: int = 800
     CHAT_TEMPERATURE: float = 0.7
 
+    # AWS S3 Configuration
+    AWS_ACCESS_KEY_ID: str = ""
+    AWS_SECRET_ACCESS_KEY: str = ""
+    AWS_REGION: str = "us-east-1"
+    S3_BUCKET_NAME: str = "venturescope-cvs"
+    S3_ENDPOINT_URL: str = ""
+
     class Config:
         env_file = ".env"
         extra = "ignore"

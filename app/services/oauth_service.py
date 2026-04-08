@@ -50,6 +50,13 @@ class OAuthService:
     SUPPORTED_PROVIDERS = {"google", "github"}
     GITHUB_SYNC_REQUIRED_SCOPES = ["read:user", "user:email", "repo", "read:org"]
 
+    GITHUB_DEFAULT_PAGINATION = {
+        "repositories": 100,
+        "languages_per_repo": 10,
+        "topics_per_repo": 10,
+        "organizations": 10,
+    }
+
     def __init__(self, db: AsyncSession):
         self.db = db
         self.user_repo = UserRepository(db)
@@ -151,16 +158,27 @@ class OAuthService:
         )
         return result.scalar_one_or_none()
 
-    def _build_github_profile_query(self) -> str:
-        return """
-query ($username: String!) {
-  user(login: $username) {
+    def _build_github_profile_query(
+        self,
+        repos: int = None,
+        langs_per_repo: int = None,
+        topics_per_repo: int = None,
+        orgs: int = None,
+    ) -> str:
+        repos = repos or self.GITHUB_DEFAULT_PAGINATION["repositories"]
+        langs_per_repo = langs_per_repo or self.GITHUB_DEFAULT_PAGINATION["languages_per_repo"]
+        topics_per_repo = topics_per_repo or self.GITHUB_DEFAULT_PAGINATION["topics_per_repo"]
+        orgs = orgs or self.GITHUB_DEFAULT_PAGINATION["organizations"]
+
+        return f"""
+query ($username: String!) {{
+  user(login: $username) {{
     login
     name
     bio
     avatarUrl
-    repositories(first: 20, orderBy: {field: STARGAZERS, direction: DESC}) {
-      nodes {
+    repositories(first: {repos}, orderBy: {{field: STARGAZERS, direction: DESC}}) {{
+      nodes {{
         name
         description
         stargazerCount
@@ -169,41 +187,41 @@ query ($username: String!) {
         isFork
         updatedAt
         pushedAt
-        primaryLanguage {
+        primaryLanguage {{
           name
-        }
-        languages(first: 10, orderBy: {field: SIZE, direction: DESC}) {
-          edges {
+        }}
+        languages(first: {langs_per_repo}, orderBy: {{field: SIZE, direction: DESC}}) {{
+          edges {{
             size
-            node {
+            node {{
               name
-            }
-          }
-        }
-        repositoryTopics(first: 10) {
-          nodes {
-            topic {
+            }}
+          }}
+        }}
+        repositoryTopics(first: {topics_per_repo}) {{
+          nodes {{
+            topic {{
               name
-            }
-          }
-        }
-      }
-    }
-    contributionsCollection {
-      contributionCalendar {
+            }}
+          }}
+        }}
+      }}
+    }}
+    contributionsCollection {{
+      contributionCalendar {{
         totalContributions
-      }
+      }}
       totalPullRequestContributions
       totalIssueContributions
       totalRepositoriesWithContributedCommits
-    }
-    organizations(first: 5) {
-      nodes {
+    }}
+    organizations(first: {orgs}) {{
+      nodes {{
         name
-      }
-    }
-  }
-}
+      }}
+    }}
+  }}
+}}
 """.strip()
 
     def _normalize_github_repository(self, repo: Dict[str, Any]) -> Dict[str, Any]:
@@ -245,9 +263,20 @@ query ($username: String!) {
         }
 
     async def _fetch_github_profile_sync_data(
-        self, access_token: str, github_username: str
+        self,
+        access_token: str,
+        github_username: str,
+        repos: int = None,
+        langs_per_repo: int = None,
+        topics_per_repo: int = None,
+        orgs: int = None,
     ) -> Dict[str, Any]:
-        query = self._build_github_profile_query()
+        query = self._build_github_profile_query(
+            repos=repos,
+            langs_per_repo=langs_per_repo,
+            topics_per_repo=topics_per_repo,
+            orgs=orgs,
+        )
         headers = {
             "Authorization": f"Bearer {access_token}",
             "Accept": "application/json",
@@ -593,11 +622,23 @@ query ($username: String!) {
                 oauth_account.provider_data = json.dumps(user_info)
             oauth_account.updated_at = datetime.now(timezone.utc)
 
+            # Update github_username for returning GitHub users if changed
+            if provider == "github" and user_info.get("provider_login"):
+                user_result = await self.db.execute(
+                    select(User).where(User.id == oauth_account.user_id)
+                )
+                user = user_result.scalar_one()
+                if user.github_username != user_info.get("provider_login"):
+                    user.github_username = user_info["provider_login"]
+
             await self.db.commit()
             await self.db.refresh(oauth_account)
-            user = await self.user_repo.get_by_id(oauth_account.user_id)
-            if not user:
-                raise ValueError("Linked OAuth user not found")
+
+            # Return the user by querying directly
+            user_result = await self.db.execute(
+                select(User).where(User.id == oauth_account.user_id)
+            )
+            user = user_result.scalar_one()
             return user
 
         # Try to find user by email (account linking)
@@ -606,7 +647,17 @@ query ($username: String!) {
         if existing_user:
             # Link OAuth account to existing user
             user = existing_user
+            if provider == "github" and user_info.get("provider_login"):
+                # Only set github_username if user doesn't already have one
+                if not user.github_username:
+                    user.github_username = user_info["provider_login"]
+                    await self.db.flush()
         else:
+            # Build extra kwargs for provider-specific fields
+            extra_kwargs = {}
+            if provider == "github" and user_info.get("provider_login"):
+                extra_kwargs["github_username"] = user_info["provider_login"]
+            
             # Create new user
             user = await self.user_repo.create_oauth_user(
                 email=email,
@@ -615,6 +666,7 @@ query ($username: String!) {
                 oauth_provider=provider,
                 oauth_id=provider_id,
                 email_verified=user_info.get("email_verified", True),
+                **extra_kwargs,
             )
 
         # Create OAuth account record
@@ -697,8 +749,23 @@ query ($username: String!) {
         auth_data = self.generate_authorization_url(provider=provider, scopes=scopes)
         return auth_data["url"], auth_data["state"]
 
-    async def get_github_profile_sync_status(self, user_id: str) -> Dict[str, Any]:
-        """Return the current GitHub sync status for a user."""
+    async def get_github_profile_sync_status(
+        self,
+        user_id: str,
+        repos: int = None,
+        langs_per_repo: int = None,
+        topics_per_repo: int = None,
+        orgs: int = None,
+    ) -> Dict[str, Any]:
+        """Return the current GitHub sync status for a user.
+
+        Args:
+            user_id: The user's ID
+            repos: Number of repositories to fetch (default from GITHUB_DEFAULT_PAGINATION)
+            langs_per_repo: Number of languages per repository (default from GITHUB_DEFAULT_PAGINATION)
+            topics_per_repo: Number of topics per repository (default from GITHUB_DEFAULT_PAGINATION)
+            orgs: Number of organizations to fetch (default from GITHUB_DEFAULT_PAGINATION)
+        """
         oauth_account = await self._get_github_oauth_account(user_id)
         required_scopes = self._get_required_github_scopes()
 
@@ -764,6 +831,10 @@ query ($username: String!) {
             profile = await self._fetch_github_profile_sync_data(
                 access_token=oauth_account.access_token,
                 github_username=github_login,
+                repos=repos,
+                langs_per_repo=langs_per_repo,
+                topics_per_repo=topics_per_repo,
+                orgs=orgs,
             )
         except OAuthProviderError as e:
             if "updated OAuth permissions" in str(e):
@@ -808,6 +879,15 @@ query ($username: String!) {
             }
         )
         await self.db.flush()
+        
+        # --- NEW: Ingest into Knowledge Base for RAG ---
+        try:
+            await self._ingest_github_knowledge(user_id=user_id, profile=profile)
+        except Exception as e:
+            # We don't want to crash the whole sync if RAG ingestion fails, just log it.
+            import logging
+            logging.getLogger(__name__).warning(f"Failed to ingest GitHub knowledge for user {user_id}: {e}")
+        
         await self.db.commit()
 
         return {
@@ -862,3 +942,44 @@ query ($username: String!) {
         is_new_user = (now - user.created_at).total_seconds() < 60
 
         return user, is_new_user
+    async def _ingest_github_knowledge(self, user_id: str, profile: Dict[str, Any]) -> None:
+        """
+        Convert GitHub profile and repository data into searchable Knowledge chunks for the RAG chatbot.
+        """
+        from app.services.knowledge_service import KnowledgeService
+        
+        knowledge_service = KnowledgeService(self.db)
+        chunks = []
+        
+        # 1. Profile Summary Chunk
+        bio = profile.get("bio") or "No bio provided."
+        chunks.append(f"GitHub Profile Summary - Username: {profile['github_username']}. Bio: {bio}")
+        
+        # 2. Repository Chunks
+        repos = profile.get("repositories", [])
+        for repo in repos:
+            name = repo.get("name")
+            desc = repo.get("description") or "No description."
+            lang = repo.get("primary_language") or "Unknown"
+            is_private = "Private" if repo.get("is_private") else "Public"
+            topics = ", ".join(repo.get("topics", []))
+            
+            repo_text = f"GitHub Repository ({is_private}): {name}. Description: {desc}. Primary Language: {lang}."
+            if topics:
+                repo_text += f" Topics: {topics}."
+            chunks.append(repo_text)
+            
+        # 3. Contributions Chunk
+        contribs = profile.get("contributions", {})
+        if contribs:
+            total = contribs.get("total_contributions", 0)
+            prs = contribs.get("total_pull_requests", 0)
+            activity_text = f"GitHub Activity: {total} total contributions, {prs} pull requests across various repositories."
+            chunks.append(activity_text)
+            
+        # Push to vector database (replaces old github_repo chunks for this user)
+        await knowledge_service.replace_user_knowledge(
+            user_id=user_id, 
+            chunks=chunks, 
+            source_type="github_repo"
+        )

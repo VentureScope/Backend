@@ -6,7 +6,7 @@ Handles user profile operations (self-service).
 import json
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,11 +19,14 @@ from app.schemas.user import (
     UserUpdate,
     PasswordChange,
     MessageResponse,
+    SkillsUpdate,
+    CVUploadResponse,
 )
 from app.models.github_sync_snapshot import GitHubSyncSnapshot
 from app.schemas.oauth import GitHubProfileSyncResponse, GitHubSyncedDataResponse
 from app.services.user_service import UserService
 from app.services.oauth_service import OAuthService
+from app.services.s3_service import S3UploadError
 
 router = APIRouter()
 
@@ -49,6 +52,7 @@ async def update_current_user_profile(
     - full_name
     - github_username
     - career_interest
+    - skills
     """
     service = UserService(db)
     try:
@@ -164,3 +168,120 @@ async def get_github_synced_data(
         organizations=json.loads(snapshot.organizations_json or "[]"),
         synced_at=snapshot.synced_at.isoformat(),
     )
+
+
+@router.put("/me/skills", response_model=UserResponse)
+async def update_skills(
+    data: SkillsUpdate,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """
+    Update current user's skills.
+
+    Skills should be a list of strings representing the user's professional skills.
+    This will update the user's embedding for better recommendations.
+    """
+    service = UserService(db)
+    try:
+        updated_user = await service.update_skills(current_user.id, data)
+        await db.commit()
+        return updated_user
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/me/cv", response_model=CVUploadResponse)
+async def upload_cv(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    file: UploadFile = File(..., description="CV file (PDF, DOC, DOCX)"),
+):
+    """
+    Upload a CV for the current user.
+
+    Allowed file types: PDF, DOC, DOCX
+    Maximum file size: 10MB
+
+    The CV will be stored in S3 and the URL will be saved in the database.
+    The user's embedding will be updated to include CV information.
+    """
+    service = UserService(db)
+
+    # Validate content type
+    allowed_types = {
+        "application/pdf",
+        "application/msword",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    }
+    if file.content_type not in allowed_types:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid file type. Allowed types: PDF, DOC, DOCX",
+        )
+
+    try:
+        file_content = await file.read()
+        cv_url = await service.upload_cv(
+            user_id=current_user.id,
+            file_content=file_content,
+            filename=file.filename,
+            content_type=file.content_type,
+        )
+        await db.commit()
+        return CVUploadResponse(
+            cv_url=cv_url,
+            message="CV uploaded successfully",
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except S3UploadError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/me/cv", response_model=MessageResponse)
+async def delete_cv(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """
+    Delete the current user's CV.
+
+    This will remove the CV from S3 and clear the CV URL from the database.
+    The user's embedding will be updated.
+    """
+    service = UserService(db)
+    try:
+        await service.delete_cv(current_user.id)
+        await db.commit()
+        return MessageResponse(
+            message="CV deleted successfully",
+            detail="Your CV has been removed",
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/me/cv/url")
+async def get_cv_url(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    expiration: int = 3600,
+):
+    """
+    Get a presigned URL for downloading the user's CV.
+
+    The presigned URL will be valid for the specified expiration time (default: 1 hour).
+    """
+    service = UserService(db)
+    presigned_url = await service.get_cv_presigned_url(
+        current_user.id, expiration=expiration
+    )
+
+    if not presigned_url:
+        raise HTTPException(
+            status_code=404,
+            detail="No CV found for this user",
+        )
+
+    return {"url": presigned_url}

@@ -40,7 +40,12 @@ class BaseEmbeddingService(ABC):
 
     @abstractmethod
     def construct_user_document(
-        self, career_interest: str | None, github_profile: str | None, estudent_profile: str | None
+        self,
+        career_interest: str | None,
+        github_profile: str | None,
+        estudent_profile: str | None,
+        skills: list | None = None,
+        cv_url: str | None = None,
     ) -> str:
         """Combine all bits of user context into one big cohesive string to embed."""
         pass
@@ -56,7 +61,12 @@ class HostedEmbeddingService(BaseEmbeddingService):
         return self.embeddings.embed_query(text)
 
     def construct_user_document(
-        self, career_interest: str | None, github_profile: str | None, estudent_profile: str | None
+        self,
+        career_interest: str | None,
+        github_profile: str | None,
+        estudent_profile: str | None,
+        skills: list | None = None,
+        cv_url: str | None = None,
     ) -> str:
         """
         Extract only what's available and create a single paragraph text for embedding.
@@ -64,10 +74,15 @@ class HostedEmbeddingService(BaseEmbeddingService):
         parts = []
         if career_interest and career_interest.strip():
             parts.append(f"Career Interest and Goals: {career_interest.strip()}")
+        if skills and len(skills) > 0:
+            skills_text = ", ".join(skills)
+            parts.append(f"Skills: {skills_text}")
         if github_profile and github_profile.strip():
             parts.append(f"GitHub Technical Profile & Projects: {github_profile.strip()}")
         if estudent_profile and estudent_profile.strip():
             parts.append(f"Educational Background (E-student): {estudent_profile.strip()}")
+        if cv_url:
+            parts.append(f"CV uploaded and available for review")
         
         # Default placeholder if profile is empty
         if not parts:
