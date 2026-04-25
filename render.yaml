@@ -1,0 +1,31 @@
+# Render Blueprint - VentureScope Backend
+# Both API and Worker use the same Dockerfile (runs Celery + health server)
+# Deploy to Render using: render-blueprints create
+# https://render.com/docs/blueprint-spec
+
+services:
+  - type: web
+    name: venturescope-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    region: frankfurt
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: DEBUG
+        value: false
+
+  - type: web
+    name: venturescope-worker
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    region: frankfurt
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: DEBUG
+        value: false
