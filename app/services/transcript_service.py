@@ -90,13 +90,15 @@ class TranscriptService:
         user = await user_service.get_profile(user_id)
         if user:
             user.estudent_profile = self._generate_estudent_summary(data)
-            await user_service._update_user_embedding(user)
+            await user_service._queue_user_embedding(user)
             await self.db.commit()
 
         # 8. Update Knowledge Base chunks
         knowledge_service = KnowledgeService(self.db)
         chunks = self._generate_transcript_chunks(data)
+        from app.tasks.knowledge_embedding_task import batch_generate_knowledge_embeddings
         await knowledge_service.replace_user_knowledge(user_id, chunks, source_type="transcript_course")
+        batch_generate_knowledge_embeddings.delay(user_id, "transcript_course")
 
         return transcript, versions_deleted, is_first_upload
 

@@ -21,6 +21,7 @@ from app.schemas.user import (
     MessageResponse,
     SkillsUpdate,
     CVUploadResponse,
+    ProfilePictureUploadResponse,
 )
 from app.models.github_sync_snapshot import GitHubSyncSnapshot
 from app.schemas.oauth import GitHubProfileSyncResponse, GitHubSyncedDataResponse
@@ -37,6 +38,23 @@ async def get_current_user_profile(
 ):
     """Get current user's profile."""
     return current_user
+
+
+@router.post("/me/retry-embedding", response_model=MessageResponse)
+async def retry_user_embedding(
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    """
+    Retry generating embedding for the current user.
+    Queues a background task to regenerate the user's embedding.
+    """
+    from app.tasks.user_embedding_task import generate_user_embedding
+    
+    current_user.embedding_status = "pending"
+    
+    generate_user_embedding.delay(current_user.id)
+    
+    return MessageResponse(message="Embedding regeneration queued")
 
 
 @router.patch("/me", response_model=UserResponse)
@@ -285,3 +303,88 @@ async def get_cv_url(
         )
 
     return {"url": presigned_url}
+
+
+@router.post("/me/profile-picture", response_model=ProfilePictureUploadResponse)
+async def upload_profile_picture(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    file: UploadFile = File(..., description="Profile picture (JPG, PNG, WEBP)"),
+):
+    """
+    Upload a profile picture for the current user.
+
+    Allowed file types: JPG, PNG, WEBP
+    Maximum file size: 5MB
+
+    The profile picture will be stored in S3 and the URL will be saved in the database.
+    """
+    service = UserService(db)
+
+    # Validate content type
+    allowed_types = {"image/jpeg", "image/png", "image/webp"}
+    if file.content_type not in allowed_types:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid file type. Allowed types: JPG, PNG, WEBP",
+        )
+
+    try:
+        file_content = await file.read()
+        profile_picture_url = await service.upload_profile_picture(
+            user_id=current_user.id,
+            file_content=file_content,
+            filename=file.filename,
+            content_type=file.content_type,
+        )
+        await db.commit()
+        return ProfilePictureUploadResponse(
+            profile_picture_url=profile_picture_url,
+            message="Profile picture uploaded successfully",
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except S3UploadError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/me/profile-picture", response_model=MessageResponse)
+async def delete_profile_picture(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """
+    Delete the current user's profile picture.
+
+    This will remove the profile picture from S3 and clear the URL from the database.
+    """
+    service = UserService(db)
+    try:
+        await service.delete_profile_picture(current_user.id)
+        await db.commit()
+        return MessageResponse(
+            message="Profile picture deleted successfully",
+            detail="Your profile picture has been removed",
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/me/profile-picture/url")
+async def get_profile_picture_url(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """
+    Get the profile picture URL for the current user.
+    """
+    service = UserService(db)
+    profile_picture_url = await service.get_profile_picture_url(current_user.id)
+
+    if not profile_picture_url:
+        raise HTTPException(
+            status_code=404,
+            detail="No profile picture found for this user",
+        )
+
+    return {"url": profile_picture_url}

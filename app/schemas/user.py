@@ -26,6 +26,7 @@ class UserResponse(BaseModel):
     career_interest: str | None
     skills: list[str] | None
     cv_url: str | None
+    profile_picture_url: str | None
     estudent_profile: str | None
     role: str
     is_active: bool
@@ -71,6 +72,13 @@ class CVUploadResponse(BaseModel):
     """Schema for CV upload response."""
 
     cv_url: str
+    message: str
+
+
+class ProfilePictureUploadResponse(BaseModel):
+    """Schema for profile picture upload response."""
+
+    profile_picture_url: str
     message: str
 
 

@@ -53,6 +53,11 @@ class User(Base):
         Vector(settings.EMBEDDING_DIMENSIONS), nullable=True
     )
 
+    # Embedding status for background task tracking
+    embedding_status: Mapped[str] = mapped_column(
+        String(20), default="pending", nullable=False
+    )  # pending, completed, failed
+
 
     # OAuth fields
     oauth_provider: Mapped[str | None] = mapped_column(

@@ -9,9 +9,9 @@ from app.core.security import hash_password, verify_password
 from app.models.user import User
 from app.repositories.user_repository import UserRepository
 from app.schemas.user import UserUpdate, PasswordChange, UserAdminUpdate, SkillsUpdate
-from app.services.embedding_service import get_embedding_service
 from app.services.github_service import fetch_github_profile_description
 from app.services.s3_service import get_s3_service, S3UploadError
+from app.tasks.user_embedding_task import generate_user_profile_embedding
 
 
 class UserService:
@@ -20,7 +20,6 @@ class UserService:
     def __init__(self, db: AsyncSession):
         self.db = db
         self.repo = UserRepository(db)
-        self.embedding_service = get_embedding_service()
         
         from app.services.knowledge_service import KnowledgeService
         self.knowledge_service = KnowledgeService(db)
@@ -28,34 +27,10 @@ class UserService:
 
     # ==================== Helper Operations ====================
 
-    async def _update_user_embedding(self, user: User) -> None:
-        """Helper to compute and update the user's embedding based on their current text attributes."""
-        github_profile_desc = await fetch_github_profile_description(user.github_username) if user.github_username else None
-        
-        doc = self.embedding_service.construct_user_document(
-            career_interest=user.career_interest,
-            github_profile=github_profile_desc,
-            estudent_profile=user.estudent_profile,
-            skills=user.skills,
-            cv_url=user.cv_url,
-        )
-        user.embedding = self.embedding_service.generate_embedding(doc)
-
-        # Update knowledge base with individual profile fields
-        chunks = []
-        if user.career_interest:
-            chunks.append(f"Career Interest & Goals: {user.career_interest}")
-        if user.skills:
-            skills_text = ", ".join(user.skills)
-            chunks.append(f"Skills: {skills_text}")
-        if user.cv_url:
-            chunks.append(f"CV uploaded at: {user.cv_url}")
-        if github_profile_desc:
-            chunks.append(f"GitHub Profile & Projects: {github_profile_desc}")
-            
-        await self.knowledge_service.replace_user_knowledge(
-            user.id, chunks, source_type="profile"
-        )
+    async def _queue_user_embedding(self, user: User) -> None:
+        """Queue embedding generation in background."""
+        user.embedding_status = "pending"
+        generate_user_profile_embedding.delay(user.id)
 
     # ==================== Self-Service Operations ====================
 
@@ -82,7 +57,7 @@ class UserService:
 
         # Vectorize new data
         if any(key in update_data for key in ['career_interest', 'github_username', 'estudent_profile', 'skills']):
-            await self._update_user_embedding(user)
+            await self._queue_user_embedding(user)
 
         return await self.repo.update(user)
 
@@ -98,7 +73,7 @@ class UserService:
             raise ValueError("User account is deactivated")
 
         user.skills = data.skills
-        await self._update_user_embedding(user)
+        await self._queue_user_embedding(user)
 
         return await self.repo.update(user)
 
@@ -146,9 +121,10 @@ class UserService:
 
         # Update user with CV URL
         user.cv_url = cv_url
-        await self._update_user_embedding(user)
+        await self._queue_user_embedding(user)
 
         await self.repo.update(user)
+
         return cv_url
 
     async def delete_cv(self, user_id: str) -> bool:
@@ -165,20 +141,98 @@ class UserService:
         if user.cv_url:
             await self.s3_service.delete_cv(user.cv_url)
             user.cv_url = None
-            await self._update_user_embedding(user)
+            await self._queue_user_embedding(user)
             await self.repo.update(user)
 
         return True
 
     async def get_cv_presigned_url(self, user_id: str, expiration: int = 3600) -> str | None:
         """
-        Get a presigned URL for downloading the user's CV.
+        Get the public URL for downloading the user's CV.
+        Since CVs are uploaded as public, return the direct URL.
         """
         user = await self.repo.get_by_id(user_id)
         if not user or not user.cv_url:
             return None
 
-        return self.s3_service.get_presigned_url(user.cv_url, expiration)
+        return user.cv_url
+
+    async def upload_profile_picture(
+        self,
+        user_id: str,
+        file_content: bytes,
+        filename: str,
+        content_type: str,
+    ) -> str:
+        """
+        Upload a profile picture for the user.
+
+        Args:
+            user_id: The user's ID
+            file_content: The profile picture file content as bytes
+            filename: Original filename
+            content_type: MIME type of the file
+
+        Returns:
+            The URL of the uploaded profile picture
+
+        Raises:
+            ValueError: If user not found or deactivated
+            S3UploadError: If upload fails
+        """
+        user = await self.repo.get_by_id(user_id)
+        if not user:
+            raise ValueError("User profile not found")
+
+        if not user.is_active:
+            raise ValueError("User account is deactivated")
+
+        # Delete old profile picture if exists
+        if user.profile_picture_url:
+            await self.s3_service.delete_profile_picture(user.profile_picture_url)
+
+        # Upload new profile picture
+        profile_picture_url = await self.s3_service.upload_profile_picture(
+            user_id=user_id,
+            file_content=file_content,
+            filename=filename,
+            content_type=content_type,
+        )
+
+        # Update user with profile picture URL
+        user.profile_picture_url = profile_picture_url
+
+        await self.repo.update(user)
+
+        return profile_picture_url
+
+    async def delete_profile_picture(self, user_id: str) -> bool:
+        """
+        Delete the user's profile picture.
+        """
+        user = await self.repo.get_by_id(user_id)
+        if not user:
+            raise ValueError("User profile not found")
+
+        if not user.is_active:
+            raise ValueError("User account is deactivated")
+
+        if user.profile_picture_url:
+            await self.s3_service.delete_profile_picture(user.profile_picture_url)
+            user.profile_picture_url = None
+            await self.repo.update(user)
+
+        return True
+
+    async def get_profile_picture_url(self, user_id: str) -> str | None:
+        """
+        Get the profile picture URL for the user.
+        """
+        user = await self.repo.get_by_id(user_id)
+        if not user or not user.profile_picture_url:
+            return None
+
+        return user.profile_picture_url
 
     async def change_password(self, user_id: str, data: PasswordChange) -> bool:
         """
@@ -264,7 +318,7 @@ class UserService:
 
         # Vectorize new data if needed
         if any(key in update_data for key in ['career_interest', 'github_username', 'estudent_profile', 'skills']):
-            await self._update_user_embedding(user)
+            await self._queue_user_embedding(user)
 
         return await self.repo.update(user)
 

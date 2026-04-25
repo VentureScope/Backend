@@ -188,8 +188,9 @@ class Settings(BaseSettings):
                 return [self.FRONTEND_URL]
 
     # Embeddings
-    EMBEDDING_MODEL_NAME: str = "all-MiniLM-L6-v2"
-    EMBEDDING_DIMENSIONS: int = 1536
+    EMBEDDING_PROVIDER: str = "hosted"
+    EMBEDDING_MODEL_NAME: str = "intfloat/e5-base-v2"
+    EMBEDDING_DIMENSIONS: int = 768
 
     # Chat / LLM completions
     CHAT_MODEL_NAME: str = "gpt-4o-mini"
@@ -202,6 +203,12 @@ class Settings(BaseSettings):
     AWS_REGION: str = "us-east-1"
     S3_BUCKET_NAME: str = "venturescope-cvs"
     S3_ENDPOINT_URL: str = ""
+    S3_PROFILE_PICTURE_BUCKET: str = "photo"
+
+    # Redis Configuration
+    REDIS_URL: str = ""
+    CELERY_BROKER_URL: str = ""
+    CELERY_RESULT_BACKEND: str = ""
 
     class Config:
         env_file = ".env"

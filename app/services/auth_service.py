@@ -4,8 +4,8 @@ from app.core.security import hash_password, verify_password, create_access_toke
 from app.models.user import User
 from app.repositories.user_repository import UserRepository
 from app.schemas.user import UserCreate, UserLogin
-from app.services.embedding_service import get_embedding_service
 from app.services.github_service import fetch_github_profile_description
+from app.tasks.user_embedding_task import generate_user_embedding
 
 # Dummy password hash for timing-attack prevention.
 # Used when user doesn't exist to ensure consistent response time.
@@ -16,32 +16,27 @@ class AuthService:
     def __init__(self, db: AsyncSession):
         self.db = db
         self.repo = UserRepository(db)
-        self.embedding_service = get_embedding_service()
 
     async def register(self, data: UserCreate) -> User:
         existing = await self.repo.get_by_email(data.email)
         if existing:
             raise ValueError("Email already registered")
             
-        github_profile_desc = await fetch_github_profile_description(data.github_username) if data.github_username else None
-            
-        doc = self.embedding_service.construct_user_document(
-            career_interest=data.career_interest,
-            github_profile=github_profile_desc,
-            estudent_profile=None
-        )
-        embedding = self.embedding_service.generate_embedding(doc)
-
         user = User(
             email=data.email,
             password_hash=hash_password(data.password),
             full_name=data.full_name,
             github_username=data.github_username,
             career_interest=data.career_interest,
+            skills=data.skills,
             role=data.role,
-            embedding=embedding
+            embedding_status="pending"
         )
-        return await self.repo.create(user)
+        user = await self.repo.create(user)
+        
+        generate_user_embedding.delay(user.id)
+        
+        return user
 
     async def login(self, data: UserLogin) -> str:
         user = await self.repo.get_by_email(data.email)

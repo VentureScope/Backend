@@ -1,4 +1,4 @@
-# Local dev: API + PostgreSQL + Redis + Testing
+# Local dev: API + PostgreSQL + Redis + Testing + Worker
 # Uses .env file for configuration - DO NOT hardcode secrets here!
 
 services:
@@ -34,6 +34,25 @@ services:
         echo 'Starting API server...' &&
         uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
       "
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://venturescope:venturescope@postgres:5432/venturescope
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_started
+    volumes:
+      - ./app:/app/app
+      - ./scripts:/app/scripts
+    profiles:
+      - worker  # Start with: docker-compose --profile worker up
 
   # Test service for running tests in Docker
   test:

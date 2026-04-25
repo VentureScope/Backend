@@ -40,6 +40,11 @@ class UserKnowledge(Base):
         Vector(settings.EMBEDDING_DIMENSIONS), nullable=False
     )
     
+    # Embedding status for background task tracking
+    embedding_status: Mapped[str] = mapped_column(
+        String(20), default="pending", nullable=False
+    )  # pending, completed, failed
+    
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

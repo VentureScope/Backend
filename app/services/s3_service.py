@@ -26,7 +26,14 @@ class S3Service:
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     }
 
+    ALLOWED_IMAGE_TYPES = {
+        "image/jpeg",
+        "image/png",
+        "image/webp",
+    }
+
     MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+    MAX_IMAGE_SIZE = 5 * 1024 * 1024  # 5MB
 
     def __init__(self):
         self.s3_client = None
@@ -67,18 +74,31 @@ class S3Service:
     def _get_public_url(self, s3_key: str) -> str:
         """Generate public URL for the uploaded file."""
         if settings.S3_ENDPOINT_URL:
-            # Supabase Storage or custom S3-compatible endpoint
-            return f"{settings.S3_ENDPOINT_URL}/{settings.S3_BUCKET_NAME}/{s3_key}"
+            # Supabase Storage format: https://{project}.supabase.co/storage/v1/object/public/{bucket}/{key}
+            # S3_ENDPOINT_URL may contain /storage/v1/s3, so extract base URL first
+            base_url = settings.S3_ENDPOINT_URL.split("/storage/v1/s3")[0]
+            return f"{base_url}/storage/v1/object/public/{settings.S3_BUCKET_NAME}/{s3_key}"
         else:
             # AWS S3
             return f"https://{settings.S3_BUCKET_NAME}.s3.{settings.AWS_REGION}.amazonaws.com/{s3_key}"
 
+    def _get_profile_picture_url(self, s3_key: str) -> str:
+        """Generate public URL for the uploaded profile picture."""
+        if settings.S3_ENDPOINT_URL:
+            # Supabase Storage format: https://{project}.supabase.co/storage/v1/object/public/{bucket}/{key}
+            base_url = settings.S3_ENDPOINT_URL.split("/storage/v1/s3")[0]
+            return f"{base_url}/storage/v1/object/public/{settings.S3_PROFILE_PICTURE_BUCKET}/{s3_key}"
+        else:
+            # AWS S3
+            return f"https://{settings.S3_PROFILE_PICTURE_BUCKET}.s3.{settings.AWS_REGION}.amazonaws.com/{s3_key}"
+
     def _extract_key_from_url(self, url: str) -> str | None:
         """Extract S3 key from URL."""
-        if settings.S3_ENDPOINT_URL and url.startswith(settings.S3_ENDPOINT_URL):
-            prefix = f"{settings.S3_ENDPOINT_URL}/{settings.S3_BUCKET_NAME}/"
-            if url.startswith(prefix):
-                return url[len(prefix):]
+        if settings.S3_ENDPOINT_URL and ".supabase.co" in url:
+            # Supabase Storage format: https://{project}.supabase.co/storage/v1/object/public/{bucket}/{key}
+            prefix = f"/storage/v1/object/public/{settings.S3_BUCKET_NAME}/"
+            if prefix in url:
+                return url.split(prefix)[1]
             return None
         else:
             # AWS S3 URL format
@@ -130,6 +150,59 @@ class S3Service:
         except ClientError as e:
             raise S3UploadError(f"Failed to upload file: {e}")
 
+    async def upload_profile_picture(
+        self,
+        user_id: str,
+        file_content: bytes,
+        filename: str,
+        content_type: str,
+    ) -> str:
+        """
+        Upload a profile picture to S3/Supabase Storage.
+
+        Args:
+            user_id: The user's ID
+            file_content: The file content as bytes
+            filename: Original filename
+            content_type: MIME type of the file
+
+        Returns:
+            The URL of the uploaded file
+
+        Raises:
+            S3UploadError: If upload fails
+        """
+        if len(file_content) > self.MAX_IMAGE_SIZE:
+            raise S3UploadError(
+                f"Image too large. Maximum size is {self.MAX_IMAGE_SIZE // (1024 * 1024)}MB"
+            )
+
+        if content_type not in self.ALLOWED_IMAGE_TYPES:
+            raise S3UploadError(
+                f"Invalid file type. Allowed types: {', '.join(self.ALLOWED_IMAGE_TYPES)}"
+            )
+
+        ext = filename.split(".")[-1] if "." in filename else "jpg"
+        unique_id = uuid.uuid4().hex[:8]
+        s3_key = f"profile-pictures/{user_id}/{unique_id}.{ext}"
+
+        try:
+            self.s3_client.put_object(
+                Bucket=settings.S3_PROFILE_PICTURE_BUCKET,
+                Key=s3_key,
+                Body=file_content,
+                ContentType=content_type,
+                Metadata={
+                    "user_id": user_id,
+                    "original_filename": filename,
+                },
+            )
+
+            return self._get_profile_picture_url(s3_key)
+
+        except ClientError as e:
+            raise S3UploadError(f"Failed to upload file: {e}")
+
     async def delete_cv(self, cv_url: str) -> bool:
         """
         Delete a CV file from S3/Supabase Storage.
@@ -153,6 +226,43 @@ class S3Service:
 
         except ClientError:
             return False
+
+    async def delete_profile_picture(self, profile_picture_url: str) -> bool:
+        """
+        Delete a profile picture from S3/Supabase Storage.
+
+        Args:
+            profile_picture_url: The full URL of the profile picture
+
+        Returns:
+            True if deletion was successful
+        """
+        try:
+            s3_key = self._extract_key_from_profile_picture_url(profile_picture_url)
+            if not s3_key:
+                return False
+
+            self.s3_client.delete_object(
+                Bucket=settings.S3_PROFILE_PICTURE_BUCKET,
+                Key=s3_key,
+            )
+            return True
+
+        except ClientError:
+            return False
+
+    def _extract_key_from_profile_picture_url(self, url: str) -> str | None:
+        """Extract S3 key from profile picture URL."""
+        if settings.S3_ENDPOINT_URL and ".supabase.co" in url:
+            prefix = f"/storage/v1/object/public/{settings.S3_PROFILE_PICTURE_BUCKET}/"
+            if prefix in url:
+                return url.split(prefix)[1]
+            return None
+        else:
+            parts = url.split(f"{settings.S3_PROFILE_PICTURE_BUCKET}.s3.{settings.AWS_REGION}.amazonaws.com/")
+            if len(parts) > 1:
+                return parts[1]
+            return None
 
     def get_presigned_url(self, cv_url: str, expiration: int = 3600) -> str | None:
         """
