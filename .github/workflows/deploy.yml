@@ -77,6 +77,6 @@ jobs:
       - name: Deploy Worker to Azure Container Apps
         run: |
           az containerapp update \
-            --name venturescope-worker \
+            --name backgroundworker \
             --resource-group ${{ secrets.AZURE_RG }} \
             --image ghcr.io/venturescope/backend-worker:${{ github.sha }}
