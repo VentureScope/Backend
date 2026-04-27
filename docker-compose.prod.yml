@@ -1,0 +1,37 @@
+# Production deployment for VM (uses external Supabase PostgreSQL + Render Redis)
+# All configuration comes from .env file
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    container_name: venturescope-api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    command: >
+      sh -c "
+        echo 'Waiting for external services...' &&
+        sleep 5 &&
+        echo 'Running database migrations...' &&
+        python -c 'import asyncio; from app.core.database import engine; asyncio.run(engine.dispose())' ||
+        echo 'Skipping migrations (DB already migrated)' &&
+        echo 'Starting API server...' &&
+        uvicorn app.main:app --host 0.0.0.0 --port 8000
+      "
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    env_file:
+      - .env
+    container_name: venturescope-worker
+    restart: unless-stopped
+
+networks:
+  default:
+    name: venturescope-network
