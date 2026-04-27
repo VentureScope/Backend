@@ -33,7 +33,7 @@ jobs:
           tags: |
             type=ref,event=branch
             type=sha,prefix=
-            type=raw,value=latest,enable={{ branch == 'main' }}
+            type=raw,value=latest
 
       - name: Build and push API image
         uses: docker/build-push-action@v5
@@ -69,7 +69,7 @@ jobs:
       - name: Deploy API to Azure Container Apps
         run: |
           az containerapp update \
-            --name venturescope-api \
+            --name venturescope \
             --resource-group ${{ secrets.AZURE_RG }} \
             --image ghcr.io/${{ github.repository }}:${{ github.sha }}
 
