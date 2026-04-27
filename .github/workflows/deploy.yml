@@ -30,7 +30,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository }}
+          images: ghcr.io/venturescope/backend
           tags: |
             type=ref,event=branch
             type=sha,prefix=
@@ -54,8 +54,8 @@ jobs:
           file: ./Dockerfile.worker
           push: true
           tags: |
-            ghcr.io/${{ github.repository }}-worker:${{ github.sha }}
-            ghcr.io/${{ github.repository }}-worker:latest
+            ghcr.io/venturescope/backend-worker:${{ github.sha }}
+            ghcr.io/venturescope/backend-worker:latest
           labels: |
             org.opencontainers.image.source=${{ github.repository-url }}
             org.opencontainers.image.title=venturescope-worker
@@ -72,11 +72,11 @@ jobs:
           az containerapp update \
             --name venturescope \
             --resource-group ${{ secrets.AZURE_RG }} \
-            --image ghcr.io/${{ github.repository }}:${{ github.sha }}
+            --image ghcr.io/venturescope/backend:${{ github.sha }}
 
       - name: Deploy Worker to Azure Container Apps
         run: |
           az containerapp update \
             --name venturescope-worker \
             --resource-group ${{ secrets.AZURE_RG }} \
-            --image ghcr.io/${{ github.repository }}-worker:${{ github.sha }}
+            --image ghcr.io/venturescope/backend-worker:${{ github.sha }}
