@@ -3,6 +3,8 @@ User Management Service - Business logic for user CRUD operations.
 Phase B Implementation.
 """
 
+import logging
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import hash_password, verify_password
@@ -12,6 +14,8 @@ from app.schemas.user import UserUpdate, PasswordChange, UserAdminUpdate, Skills
 from app.services.github_service import fetch_github_profile_description
 from app.services.s3_service import get_s3_service, S3UploadError
 from app.tasks.user_embedding_task import generate_user_profile_embedding
+
+logger = logging.getLogger(__name__)
 
 
 class UserService:
@@ -122,6 +126,26 @@ class UserService:
         # Update user with CV URL
         user.cv_url = cv_url
         await self._queue_user_embedding(user)
+
+        # Extract CV text and create knowledge chunks
+        try:
+            from app.services.cv_extractor import get_cv_extractor
+            extractor = get_cv_extractor()
+            cv_text = extractor.extract_text(file_content, filename)
+            
+            if cv_text and len(cv_text) > 50:
+                chunks = extractor.chunk_text(cv_text, chunk_size=1000, overlap=100)
+                
+                if chunks:
+                    for chunk in chunks:
+                        await self.knowledge_service.ingest_knowledge(
+                            user_id=user_id,
+                            content=chunk,
+                            source_type="resume"
+                        )
+                    logger.info(f"Created {len(chunks)} knowledge chunks from CV for user {user_id}")
+        except Exception as e:
+            logger.warning(f"Failed to extract CV text: {e}")
 
         await self.repo.update(user)
 

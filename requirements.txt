@@ -44,4 +44,6 @@ openai
 langchain
 langchain-community
 langchain-openai
-# numpy<2  # Pinned since some ML packages have issues with numpy 2 out of the box in older environments
+# CV/Resume parsing
+pypdf>=5.1.0
+python-docx>=1.1.0
