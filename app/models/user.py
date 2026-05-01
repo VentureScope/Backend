@@ -14,11 +14,11 @@ from pgvector.sqlalchemy import Vector
 from app.core.config import settings
 
 from app.core.database import Base
+from app.models.experience import Experience
 
 if TYPE_CHECKING:
     from app.models.oauth_account import OAuthAccount
     from app.models.github_sync_snapshot import GitHubSyncSnapshot
-    from app.models.experience import Experience
 
 
 class UserRole(str, enum.Enum):
