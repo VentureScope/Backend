@@ -3,7 +3,6 @@ Experience management service.
 """
 
 from datetime import datetime
-from typing import list
 
 from app.models.experience import Experience
 from app.repositories.experience_repository import ExperienceRepository

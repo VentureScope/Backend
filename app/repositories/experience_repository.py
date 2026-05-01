@@ -5,7 +5,6 @@ Repository for Experience CRUD operations.
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
 from app.models.experience import Experience
-from typing import list
 
 
 class ExperienceRepository:
