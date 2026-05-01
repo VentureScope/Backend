@@ -18,6 +18,7 @@ from app.core.database import Base
 if TYPE_CHECKING:
     from app.models.oauth_account import OAuthAccount
     from app.models.github_sync_snapshot import GitHubSyncSnapshot
+    from app.models.experience import Experience
 
 
 class UserRole(str, enum.Enum):
@@ -47,7 +48,7 @@ class User(Base):
     skills: Mapped[list | None] = mapped_column(JSON, nullable=True)  # List of skill strings
     cv_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)  # S3 URL for CV
     estudent_profile: Mapped[str | None] = mapped_column(String(1000), nullable=True)  # E-student summarized profile
-    
+
     # Store generated similarity embedding using pgvector
     embedding: Mapped[list[float] | None] = mapped_column(
         Vector(settings.EMBEDDING_DIMENSIONS), nullable=True
@@ -58,6 +59,10 @@ class User(Base):
         String(20), default="pending", nullable=False
     )  # pending, completed, failed
 
+    # Social media links (JSON): {"linkedin": "url", "twitter": "url", "portfolio": "url"}
+    social_links: Mapped[dict | None] = mapped_column(
+        String(2000), nullable=True
+    )
 
     # OAuth fields
     oauth_provider: Mapped[str | None] = mapped_column(
@@ -93,3 +98,9 @@ class User(Base):
         cascade="all, delete-orphan",
         uselist=False,
     )
+    experiences: Mapped[list["Experience"]] = relationship(
+        "Experience", back_populates="user", cascade="all, delete-orphan"
+    )
+
+    def __repr__(self) -> str:
+        return f"<User(id={self.id}, email={self.email})>"

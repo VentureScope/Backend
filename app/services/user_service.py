@@ -34,7 +34,15 @@ class UserService:
     async def _queue_user_embedding(self, user: User) -> None:
         """Queue embedding generation in background."""
         user.embedding_status = "pending"
-        generate_user_profile_embedding.delay(user.id)
+        # Pass social_links and experiences for embedding
+        social_links = user.social_links
+        # Get experiences for this user
+        from app.services.experience_service import ExperienceService
+        exp_service = ExperienceService(self.db)
+        experiences = await exp_service.get_all_for_user(user.id)
+        generate_user_profile_embedding.delay(
+            user.id, social_links=social_links, experiences=experiences
+        )
 
     # ==================== Self-Service Operations ====================
 
@@ -60,7 +68,7 @@ class UserService:
             setattr(user, field, value)
 
         # Vectorize new data
-        if any(key in update_data for key in ['career_interest', 'github_username', 'estudent_profile', 'skills']):
+        if any(key in update_data for key in ['career_interest', 'github_username', 'estudent_profile', 'skills', 'social_links']):
             await self._queue_user_embedding(user)
 
         return await self.repo.update(user)

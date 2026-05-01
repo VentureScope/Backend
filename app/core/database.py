@@ -29,7 +29,7 @@ class Base(DeclarativeBase):
 async def get_db() -> AsyncSession:
     """
     Dependency that provides an async database session.
-
+    
     Successful requests are automatically committed after the caller
     finishes using the session. Rollback is automatic on exceptions.
     """

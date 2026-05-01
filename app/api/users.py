@@ -18,10 +18,15 @@ from app.schemas.user import (
     UserResponse,
     UserUpdate,
     PasswordChange,
-    MessageResponse,
     SkillsUpdate,
     CVUploadResponse,
     ProfilePictureUploadResponse,
+    MessageResponse,
+)
+from app.schemas.experience import (
+    ExperienceCreate,
+    ExperienceUpdate,
+    ExperienceResponse,
 )
 from app.models.github_sync_snapshot import GitHubSyncSnapshot
 from app.schemas.oauth import GitHubProfileSyncResponse, GitHubSyncedDataResponse
@@ -48,11 +53,11 @@ async def retry_user_embedding(
     Retry generating embedding for the current user.
     Queues a background task to regenerate the user's embedding.
     """
-    from app.tasks.user_embedding_task import generate_user_embedding
+    from app.tasks.user_embedding_task import generate_user_profile_embedding
     
     current_user.embedding_status = "pending"
     
-    generate_user_embedding.delay(current_user.id)
+    generate_user_profile_embedding.delay(current_user.id)
     
     return MessageResponse(message="Embedding regeneration queued")
 
@@ -388,3 +393,56 @@ async def get_profile_picture_url(
         )
 
     return {"url": profile_picture_url}
+
+@router.post("/me/experiences", response_model=ExperienceResponse)
+async def create_experience(
+    data: ExperienceCreate,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Add a new work experience entry."""
+    from app.services.experience_service import ExperienceService
+    service = ExperienceService(db)
+    return await service.create_experience(current_user.id, data)
+
+
+@router.get("/me/experiences", response_model=list[ExperienceResponse])
+async def list_experiences(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """List all work experiences."""
+    from app.services.experience_service import ExperienceService
+    service = ExperienceService(db)
+    return await service.get_all_for_user(current_user.id)
+
+
+@router.put("/me/experiences/{experience_id}", response_model=ExperienceResponse)
+async def update_experience(
+    experience_id: str,
+    data: ExperienceUpdate,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Update a work experience entry."""
+    from app.services.experience_service import ExperienceService
+    service = ExperienceService(db)
+    exp = await service.update_experience(experience_id, data)
+    if not exp:
+        raise HTTPException(status_code=404, detail="Experience not found")
+    return exp
+
+
+@router.delete("/me/experiences/{experience_id}", response_model=MessageResponse)
+async def delete_experience(
+    experience_id: str,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Delete a work experience entry."""
+    from app.services.experience_service import ExperienceService
+    service = ExperienceService(db)
+    success = await service.delete_experience(experience_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Experience not found")
+    return MessageResponse(message="Experience deleted successfully")

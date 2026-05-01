@@ -1,3 +1,3 @@
 # Tasks package
-from app.tasks.user_embedding_task import generate_user_embedding, generate_user_profile_embedding
+from app.tasks.user_embedding_task import generate_user_profile_embedding
 from app.tasks.knowledge_embedding_task import generate_knowledge_embedding, batch_generate_knowledge_embeddings

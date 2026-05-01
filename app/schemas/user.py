@@ -28,6 +28,7 @@ class UserResponse(BaseModel):
     cv_url: str | None
     profile_picture_url: str | None
     estudent_profile: str | None
+    social_links: dict | None
     role: str
     is_active: bool
     is_admin: bool

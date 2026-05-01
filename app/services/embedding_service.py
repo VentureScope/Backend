@@ -110,6 +110,8 @@ class HostedEmbeddingService(BaseEmbeddingService):
         estudent_profile: str | None,
         skills: list | None = None,
         cv_url: str | None = None,
+        social_links: dict | None = None,
+        experiences: list | None = None,
     ) -> str:
         """
         Extract only what's available and create a single paragraph text for embedding.
@@ -126,6 +128,33 @@ class HostedEmbeddingService(BaseEmbeddingService):
             parts.append(f"Educational Background (E-student): {estudent_profile.strip()}")
         if cv_url:
             parts.append(f"CV uploaded and available for review")
+        
+        # Add social media links
+        if social_links and isinstance(social_links, dict):
+            links_text = ", ".join(f"{k}: {v}" for k, v in social_links.items() if v)
+            if links_text:
+                parts.append(f"Social Links: {links_text}")
+        
+        # Add work experience
+        if experiences and len(experiences) > 0:
+            exp_parts = []
+            for exp in experiences:
+                if isinstance(exp, dict):
+                    title = exp.get("job_title", "")
+                    company = exp.get("company", "")
+                    if title:
+                        exp_str = f"{title} at {company}" if company else title
+                        # Add dates
+                        start = exp.get("start_date", "")
+                        end = exp.get("end_date", "") or "Present"
+                        if start:
+                            exp_str += f" ({start} – {end})"
+                        exp_parts.append(exp_str)
+                        # Add skills used
+                        if exp.get("skills_used"):
+                            exp_parts[-1] += f" | Skills: {', '.join(exp['skills_used'])}"
+            if exp_parts:
+                parts.append("Work Experience:\n" + "\n".join(exp_parts))
         
         # Default placeholder if profile is empty
         if not parts:
@@ -148,6 +177,8 @@ class BertEmbeddingService(BaseEmbeddingService):
         estudent_profile: str | None,
         skills: list | None = None,
         cv_url: str | None = None,
+        social_links: dict | None = None,
+        experiences: list | None = None,
     ) -> str:
         parts = []
         if career_interest and career_interest.strip():
@@ -162,6 +193,34 @@ class BertEmbeddingService(BaseEmbeddingService):
         if cv_url:
             parts.append(f"CV uploaded and available for review")
         
+        # Add social media links
+        if social_links and isinstance(social_links, dict):
+            links_text = ", ".join(f"{k}: {v}" for k, v in social_links.items() if v)
+            if links_text:
+                parts.append(f"Social Links: {links_text}")
+        
+        # Add work experience
+        if experiences and len(experiences) > 0:
+            exp_parts = []
+            for exp in experiences:
+                if isinstance(exp, dict):
+                    title = exp.get("job_title", "")
+                    company = exp.get("company", "")
+                    if title:
+                        exp_str = f"{title} at {company}" if company else title
+                        # Add dates
+                        start = exp.get("start_date", "")
+                        end = exp.get("end_date", "") or "Present"
+                        if start:
+                            exp_str += f" ({start} – {end})"
+                        exp_parts.append(exp_str)
+                        # Add skills used
+                        if exp.get("skills_used"):
+                            exp_parts[-1] += f" | Skills: {', '.join(exp['skills_used'])}"
+            if exp_parts:
+                parts.append("Work Experience:\n" + "\n".join(exp_parts))
+        
+        # Default placeholder if profile is empty
         if not parts:
             return "General new user with no profile data yet."
             

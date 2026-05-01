@@ -5,7 +5,7 @@ from app.models.user import User
 from app.repositories.user_repository import UserRepository
 from app.schemas.user import UserCreate, UserLogin
 from app.services.github_service import fetch_github_profile_description
-from app.tasks.user_embedding_task import generate_user_embedding
+from app.tasks.user_embedding_task import generate_user_profile_embedding
 
 # Dummy password hash for timing-attack prevention.
 # Used when user doesn't exist to ensure consistent response time.
@@ -34,7 +34,7 @@ class AuthService:
         )
         user = await self.repo.create(user)
         
-        generate_user_embedding.delay(user.id)
+        generate_user_profile_embedding.delay(user.id)
         
         return user
 

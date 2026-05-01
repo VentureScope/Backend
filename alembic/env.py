@@ -21,10 +21,19 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 # Import your models here for autogenerate support
-from app.core.database import Base
-from app.models import *  # Import all models
+from app.models.user import User
+from app.models.oauth_account import OAuthAccount
+from app.models.token_blocklist import TokenBlocklist
+from app.models.chat import ChatSession, ChatMessage
+from app.models.notification import Notification
+from app.models.user_knowledge import UserKnowledge
+from app.models.academic_transcript import AcademicTranscript
+from app.models.transcript_config import TranscriptConfig
+from app.models.github_sync_snapshot import GitHubSyncSnapshot
+from app.models.experience import Experience
 
 # Set target metadata for autogenerate
+from app.core.database import Base
 target_metadata = Base.metadata
 
 # Get database URL from environment variable
