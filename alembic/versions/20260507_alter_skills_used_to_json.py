@@ -17,22 +17,35 @@ depends_on = None
 
 
 def upgrade() -> None:
-    """Change skills_used column from VARCHAR to JSON."""
-    op.alter_column(
-        "experiences",
-        "skills_used",
-        existing_type=sa.String(1000),
-        type_=sa.JSON(),
-        existing_nullable=True,
-    )
+    """Change skills_used column from VARCHAR to JSON with data conversion."""
+    # First, handle empty strings (convert to NULL)
+    op.execute("""
+        UPDATE experiences 
+        SET skills_used = NULL 
+        WHERE skills_used IS NOT NULL 
+        AND (skills_used = '' OR skills_used = 'null')
+    """)
+    
+    # Now alter column with USING clause for data conversion
+    op.execute("""
+        ALTER TABLE experiences 
+        ALTER COLUMN skills_used TYPE JSON 
+        USING CASE 
+            WHEN skills_used IS NOT NULL 
+            THEN skills_used::json 
+            ELSE NULL 
+        END
+    """)
 
 
 def downgrade() -> None:
     """Revert skills_used column from JSON to VARCHAR."""
-    op.alter_column(
-        "experiences",
-        "skills_used",
-        existing_type=sa.JSON(),
-        type_=sa.String(1000),
-        existing_nullable=True,
-    )
+    op.execute("""
+        ALTER TABLE experiences 
+        ALTER COLUMN skills_used TYPE VARCHAR(1000) 
+        USING CASE 
+            WHEN skills_used IS NOT NULL 
+            THEN skills_used::text 
+            ELSE NULL 
+        END
+    """)
