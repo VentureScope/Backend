@@ -5,7 +5,7 @@ Work Experience model for user profiles.
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
-from sqlalchemy import String, DateTime, ForeignKey, func
+from sqlalchemy import String, DateTime, ForeignKey, func, JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 import uuid
@@ -46,7 +46,7 @@ class Experience(Base):
     description: Mapped[str | None] = mapped_column(String(2000), nullable=True)
 
     # List of skills used in this role (JSON)
-    skills_used: Mapped[list | None] = mapped_column(String(1000), nullable=True)
+    skills_used: Mapped[list | None] = mapped_column(JSON, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
