@@ -1,7 +1,7 @@
 from typing import Literal
 import re
 
-from pydantic import BaseModel, EmailStr, Field, field_validator
+from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
 # Valid role values matching UserRole enum
 RoleType = Literal["student", "professional", "b2b_client"]
@@ -53,9 +53,20 @@ class UserResponse(BaseModel):
     role: str
     is_active: bool
     is_admin: bool
+    oauth_provider: str | None = None
+    has_password: bool = False
+    # Internal field to help populate has_password from ORM
+    password_hash: str | None = Field(None, exclude=True)
 
     class Config:
         from_attributes = True
+
+    @model_validator(mode="after")
+    def set_has_password(self) -> "UserResponse":
+        """Set has_password based on presence of password_hash."""
+        if self.password_hash is not None:
+            self.has_password = True
+        return self
 
 
 class UserLogin(BaseModel):
