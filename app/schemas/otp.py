@@ -1,4 +1,6 @@
-from pydantic import BaseModel, EmailStr, Field
+import re
+
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 
 class OtpVerifyRequest(BaseModel):
@@ -50,8 +52,26 @@ class ResetPasswordRequest(BaseModel):
     email: EmailStr
     otp: str = Field(..., min_length=6, max_length=6, pattern=r"^\d{6}$")
     new_password: str = Field(
-        ..., min_length=8, description="New password (min 8 characters)"
+        ...,
+        min_length=8,
+        description="New password — must contain uppercase, lowercase, a digit, and a special character",
     )
+
+    @field_validator("new_password")
+    @classmethod
+    def validate_new_password_strength(cls, v: str) -> str:
+        errors = []
+        if not re.search(r"[A-Z]", v):
+            errors.append("one uppercase letter")
+        if not re.search(r"[a-z]", v):
+            errors.append("one lowercase letter")
+        if not re.search(r"\d", v):
+            errors.append("one digit")
+        if not re.search(r"[^A-Za-z0-9]", v):
+            errors.append("one special character")
+        if errors:
+            raise ValueError(f"Password must contain {', '.join(errors)}.")
+        return v
 
 
 class ResetPasswordResponse(BaseModel):
