@@ -37,28 +37,29 @@ def upgrade() -> None:
     )
 
     # Process each GitHub OAuth account
-    for row in result:
-        user_id, provider_data_json = row
+    if result:
+        for row in result:
+            user_id, provider_data_json = row
 
-        if provider_data_json:
-            try:
-                provider_data = json.loads(provider_data_json)
-                github_username = provider_data.get("provider_login")
+            if provider_data_json:
+                try:
+                    provider_data = json.loads(provider_data_json)
+                    github_username = provider_data.get("provider_login")
 
-                if github_username:
-                    # Update the user's github_username field
-                    connection.execute(
-                        sa.text("""
-                            UPDATE users 
-                            SET github_username = :github_username, updated_at = CURRENT_TIMESTAMP
-                            WHERE id = :user_id
-                        """),
-                        {"github_username": github_username, "user_id": user_id},
-                    )
+                    if github_username:
+                        # Update the user's github_username field
+                        connection.execute(
+                            sa.text("""
+                                UPDATE users 
+                                SET github_username = :github_username, updated_at = CURRENT_TIMESTAMP
+                                WHERE id = :user_id
+                            """),
+                            {"github_username": github_username, "user_id": user_id},
+                        )
 
-            except (json.JSONDecodeError, KeyError):
-                # Skip invalid JSON or missing data
-                continue
+                except (json.JSONDecodeError, KeyError):
+                    # Skip invalid JSON or missing data
+                    continue
 
 
 def downgrade() -> None:

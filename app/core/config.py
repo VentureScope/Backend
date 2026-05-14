@@ -210,6 +210,20 @@ class Settings(BaseSettings):
     CELERY_BROKER_URL: str = ""
     CELERY_RESULT_BACKEND: str = ""
 
+    # Email / OTP Configuration
+    EMAIL_PROVIDER: str = "mailgun"  # mailgun | (extendable: sendgrid, smtp, ...)
+    MAILGUN_API_KEY: str = ""
+    MAILGUN_DOMAIN: str = ""
+    MAILGUN_FROM_EMAIL: str = "noreply@mg.venturescope.app"
+    MAILGUN_API_BASE_URL: str = (
+        "https://api.mailgun.net/v3"  # EU: https://api.eu.mailgun.net/v3
+    )
+
+    # OTP settings
+    OTP_EXPIRE_MINUTES: int = 10
+    OTP_RESEND_COOLDOWN_SECONDS: int = 60  # min seconds between resends
+    OTP_MAX_RESENDS_PER_HOUR: int = 3  # hard cap per rolling hour
+
     class Config:
         env_file = ".env"
         extra = "ignore"

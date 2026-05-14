@@ -93,7 +93,9 @@ class OAuthService:
             raise ValueError(f"Unsupported provider: {provider}")
         return self.provider_configs[provider]
 
-    def _normalize_scopes(self, provider: str, scopes: list[str] | None = None) -> list[str]:
+    def _normalize_scopes(
+        self, provider: str, scopes: list[str] | None = None
+    ) -> list[str]:
         """Return a deduplicated, ordered scope list for an OAuth provider."""
         config = self._get_provider_config(provider)
         raw_scopes = scopes if scopes is not None else config["scopes"]
@@ -105,7 +107,9 @@ class OAuthService:
                 normalized.append(scope)
         return normalized
 
-    def _parse_provider_data(self, oauth_account: OAuthAccount | None) -> Dict[str, Any]:
+    def _parse_provider_data(
+        self, oauth_account: OAuthAccount | None
+    ) -> Dict[str, Any]:
         """Safely parse provider_data JSON from an OAuth account."""
         if not oauth_account or not oauth_account.provider_data:
             return {}
@@ -124,7 +128,9 @@ class OAuthService:
         raw_scopes = data.get("granted_scopes", [])
 
         if isinstance(raw_scopes, str):
-            raw_scopes = [scope.strip() for scope in raw_scopes.split(",") if scope.strip()]
+            raw_scopes = [
+                scope.strip() for scope in raw_scopes.split(",") if scope.strip()
+            ]
 
         if not isinstance(raw_scopes, list):
             return []
@@ -134,7 +140,9 @@ class OAuthService:
     def _get_required_github_scopes(self) -> list[str]:
         return self._normalize_scopes("github", self.GITHUB_SYNC_REQUIRED_SCOPES)
 
-    def _missing_scopes(self, granted_scopes: list[str], required_scopes: list[str]) -> list[str]:
+    def _missing_scopes(
+        self, granted_scopes: list[str], required_scopes: list[str]
+    ) -> list[str]:
         granted = set(granted_scopes)
         return [scope for scope in required_scopes if scope not in granted]
 
@@ -166,8 +174,12 @@ class OAuthService:
         orgs: int = None,
     ) -> str:
         repos = repos or self.GITHUB_DEFAULT_PAGINATION["repositories"]
-        langs_per_repo = langs_per_repo or self.GITHUB_DEFAULT_PAGINATION["languages_per_repo"]
-        topics_per_repo = topics_per_repo or self.GITHUB_DEFAULT_PAGINATION["topics_per_repo"]
+        langs_per_repo = (
+            langs_per_repo or self.GITHUB_DEFAULT_PAGINATION["languages_per_repo"]
+        )
+        topics_per_repo = (
+            topics_per_repo or self.GITHUB_DEFAULT_PAGINATION["topics_per_repo"]
+        )
         orgs = orgs or self.GITHUB_DEFAULT_PAGINATION["organizations"]
 
         return f"""
@@ -251,12 +263,18 @@ query ($username: String!) {{
             "topics": topics,
         }
 
-    def _normalize_github_contributions(self, contributions: Dict[str, Any]) -> Dict[str, Any]:
+    def _normalize_github_contributions(
+        self, contributions: Dict[str, Any]
+    ) -> Dict[str, Any]:
         calendar = contributions.get("contributionCalendar", {})
         return {
             "total_contributions": calendar.get("totalContributions", 0),
-            "total_pull_requests": contributions.get("totalPullRequestContributions", 0),
-            "total_issue_contributions": contributions.get("totalIssueContributions", 0),
+            "total_pull_requests": contributions.get(
+                "totalPullRequestContributions", 0
+            ),
+            "total_issue_contributions": contributions.get(
+                "totalIssueContributions", 0
+            ),
             "total_repositories_with_contributed_commits": contributions.get(
                 "totalRepositoriesWithContributedCommits", 0
             ),
@@ -300,7 +318,10 @@ query ($username: String!) {{
 
         if payload.get("errors"):
             error_message = payload["errors"][0].get("message", "Unknown GitHub error")
-            if "not accessible" in error_message.lower() or "scope" in error_message.lower():
+            if (
+                "not accessible" in error_message.lower()
+                or "scope" in error_message.lower()
+            ):
                 raise OAuthProviderError(
                     "GitHub profile sync requires updated OAuth permissions"
                 )
@@ -364,7 +385,9 @@ query ($username: String!) {{
             "Accept": "application/json",
         }
 
-        userinfo_response = await client.get(config["userinfo_endpoint"], headers=headers)
+        userinfo_response = await client.get(
+            config["userinfo_endpoint"], headers=headers
+        )
         userinfo_response.raise_for_status()
         user_info = userinfo_response.json()
 
@@ -374,7 +397,9 @@ query ($username: String!) {{
         # Normalize GitHub payload to internal format expected by the user creation flow.
         email = user_info.get("email")
         if not email:
-            emails_response = await client.get(config["email_endpoint"], headers=headers)
+            emails_response = await client.get(
+                config["email_endpoint"], headers=headers
+            )
             emails_response.raise_for_status()
             emails = emails_response.json()
 
@@ -389,7 +414,9 @@ query ($username: String!) {{
             email = primary_email or verified_email
 
         if not email:
-            raise OAuthProviderError("GitHub account does not expose an accessible email")
+            raise OAuthProviderError(
+                "GitHub account does not expose an accessible email"
+            )
 
         return {
             "id": str(user_info["id"]),
@@ -544,9 +571,15 @@ query ($username: String!) {{
                         f"Token exchange failed: {tokens['error']}"
                     )
 
-                if provider == "github" and "scope" in tokens and isinstance(tokens["scope"], str):
+                if (
+                    provider == "github"
+                    and "scope" in tokens
+                    and isinstance(tokens["scope"], str)
+                ):
                     tokens["granted_scopes"] = [
-                        scope.strip() for scope in tokens["scope"].split(",") if scope.strip()
+                        scope.strip()
+                        for scope in tokens["scope"].split(",")
+                        if scope.strip()
                     ]
 
             except httpx.HTTPError as e:
@@ -645,8 +678,12 @@ query ($username: String!) {{
         existing_user = await self.user_repo.get_by_email(email)
 
         if existing_user:
-            # Link OAuth account to existing user
+            # Link OAuth account to existing user.
+            # Also mark them as verified — the OAuth provider confirmed this email.
             user = existing_user
+            if not user.is_verified:
+                user.is_verified = True
+                await self.db.flush()
             if provider == "github" and user_info.get("provider_login"):
                 # Only set github_username if user doesn't already have one
                 if not user.github_username:
@@ -657,8 +694,8 @@ query ($username: String!) {{
             extra_kwargs = {}
             if provider == "github" and user_info.get("provider_login"):
                 extra_kwargs["github_username"] = user_info["provider_login"]
-            
-            # Create new user
+
+            # Create new user — OAuth providers have already verified the email
             user = await self.user_repo.create_oauth_user(
                 email=email,
                 full_name=user_info.get("name"),
@@ -666,18 +703,19 @@ query ($username: String!) {{
                 oauth_provider=provider,
                 oauth_id=provider_id,
                 email_verified=user_info.get("email_verified", True),
+                is_verified=True,  # OAuth email ownership is implicitly confirmed
                 **extra_kwargs,
             )
 
         # Create OAuth account record
         granted_scopes = (
-            self._normalize_scopes(
-                "github", tokens.get("granted_scopes") or []
-            )
+            self._normalize_scopes("github", tokens.get("granted_scopes") or [])
             if provider == "github"
             else []
         )
-        provider_data = self._provider_data_payload(user_info=user_info, granted_scopes=granted_scopes)
+        provider_data = self._provider_data_payload(
+            user_info=user_info, granted_scopes=granted_scopes
+        )
         oauth_account = await self.user_repo.create_oauth_account(
             user=user,
             provider=provider,
@@ -784,7 +822,10 @@ query ($username: String!) {{
                 "contributions": None,
             }
 
-        if oauth_account.token_expires_at and oauth_account.token_expires_at < datetime.now(timezone.utc):
+        if (
+            oauth_account.token_expires_at
+            and oauth_account.token_expires_at < datetime.now(timezone.utc)
+        ):
             authorization_url, state = await self.get_authorization_url(
                 provider="github", scopes=required_scopes
             )
@@ -879,15 +920,18 @@ query ($username: String!) {{
             }
         )
         await self.db.flush()
-        
+
         # --- NEW: Ingest into Knowledge Base for RAG ---
         try:
             await self._ingest_github_knowledge(user_id=user_id, profile=profile)
         except Exception as e:
             # We don't want to crash the whole sync if RAG ingestion fails, just log it.
             import logging
-            logging.getLogger(__name__).warning(f"Failed to ingest GitHub knowledge for user {user_id}: {e}")
-        
+
+            logging.getLogger(__name__).warning(
+                f"Failed to ingest GitHub knowledge for user {user_id}: {e}"
+            )
+
         await self.db.commit()
 
         return {
@@ -942,19 +986,24 @@ query ($username: String!) {{
         is_new_user = (now - user.created_at).total_seconds() < 60
 
         return user, is_new_user
-    async def _ingest_github_knowledge(self, user_id: str, profile: Dict[str, Any]) -> None:
+
+    async def _ingest_github_knowledge(
+        self, user_id: str, profile: Dict[str, Any]
+    ) -> None:
         """
         Convert GitHub profile and repository data into searchable Knowledge chunks for the RAG chatbot.
         """
         from app.services.knowledge_service import KnowledgeService
-        
+
         knowledge_service = KnowledgeService(self.db)
         chunks = []
-        
+
         # 1. Profile Summary Chunk
         bio = profile.get("bio") or "No bio provided."
-        chunks.append(f"GitHub Profile Summary - Username: {profile['github_username']}. Bio: {bio}")
-        
+        chunks.append(
+            f"GitHub Profile Summary - Username: {profile['github_username']}. Bio: {bio}"
+        )
+
         # 2. Repository Chunks
         repos = profile.get("repositories", [])
         for repo in repos:
@@ -963,12 +1012,12 @@ query ($username: String!) {{
             lang = repo.get("primary_language") or "Unknown"
             is_private = "Private" if repo.get("is_private") else "Public"
             topics = ", ".join(repo.get("topics", []))
-            
+
             repo_text = f"GitHub Repository ({is_private}): {name}. Description: {desc}. Primary Language: {lang}."
             if topics:
                 repo_text += f" Topics: {topics}."
             chunks.append(repo_text)
-            
+
         # 3. Contributions Chunk
         contribs = profile.get("contributions", {})
         if contribs:
@@ -976,10 +1025,8 @@ query ($username: String!) {{
             prs = contribs.get("total_pull_requests", 0)
             activity_text = f"GitHub Activity: {total} total contributions, {prs} pull requests across various repositories."
             chunks.append(activity_text)
-            
+
         # Push to vector database (replaces old github_repo chunks for this user)
         await knowledge_service.replace_user_knowledge(
-            user_id=user_id, 
-            chunks=chunks, 
-            source_type="github_repo"
+            user_id=user_id, chunks=chunks, source_type="github_repo"
         )
