@@ -371,7 +371,7 @@ query ($username: String!) {
             "provider_login": user_info.get("login"),
         }
 
-    def generate_state(self) -> str:
+    def generate_state(self, payload: Dict[str, Any] | None = None) -> str:
         """
         Generate a cryptographically secure state parameter for CSRF protection.
 
@@ -382,8 +382,15 @@ query ($username: String!) {
         timestamp = int(datetime.now(timezone.utc).timestamp())
         random_bytes = secrets.token_bytes(32)
 
-        # Combine timestamp and random data
+        payload_b64 = ""
+        if payload:
+            payload_json = json.dumps(payload, separators=(",", ":"), sort_keys=True)
+            payload_b64 = base64.urlsafe_b64encode(payload_json.encode()).decode().rstrip("=")
+
+        # Combine timestamp and random data (and optional payload)
         state_data = f"{timestamp}:{base64.b64encode(random_bytes).decode()}"
+        if payload_b64:
+            state_data = f"{state_data}:{payload_b64}"
 
         # Sign the state with our secret key
         signature = hashlib.sha256(
@@ -394,7 +401,7 @@ query ($username: String!) {
         final_state = f"{state_data}:{signature}"
         return base64.b64encode(final_state.encode()).decode()
 
-    def validate_state(self, state: str) -> bool:
+    def validate_state(self, state: str) -> Dict[str, Any] | None:
         """
         Validate OAuth state parameter for CSRF protection.
 
@@ -402,7 +409,7 @@ query ($username: String!) {
             state: State parameter from OAuth callback
 
         Returns:
-            True if state is valid and not expired
+            Parsed payload dict if present, otherwise None
 
         Raises:
             OAuthStateError: If state is invalid or expired
@@ -410,10 +417,16 @@ query ($username: String!) {
         try:
             # Decode the state
             decoded_state = base64.b64decode(state).decode()
-            timestamp_str, random_data, signature = decoded_state.split(":", 2)
-
-            # Reconstruct and verify signature
-            state_data = f"{timestamp_str}:{random_data}"
+            parts = decoded_state.split(":")
+            if len(parts) == 3:
+                timestamp_str, random_data, signature = parts
+                payload_b64 = ""
+                state_data = f"{timestamp_str}:{random_data}"
+            elif len(parts) == 4:
+                timestamp_str, random_data, payload_b64, signature = parts
+                state_data = f"{timestamp_str}:{random_data}:{payload_b64}"
+            else:
+                raise OAuthStateError("State format invalid")
             expected_signature = hashlib.sha256(
                 (state_data + settings.OAUTH_STATE_SECRET).encode()
             ).hexdigest()
@@ -428,13 +441,25 @@ query ($username: String!) {
             if datetime.now(timezone.utc).timestamp() > expiry:
                 raise OAuthStateError("State expired")
 
-            return True
+            if not payload_b64:
+                return None
+
+            padding = "=" * (-len(payload_b64) % 4)
+            payload_json = base64.urlsafe_b64decode(payload_b64 + padding).decode()
+            payload = json.loads(payload_json)
+            if not isinstance(payload, dict):
+                raise OAuthStateError("State payload invalid")
+
+            return payload
 
         except (ValueError, TypeError) as e:
             raise OAuthStateError(f"State format invalid: {e}")
 
     def generate_authorization_url(
-        self, provider: str = "google", scopes: list[str] | None = None
+        self,
+        provider: str = "google",
+        scopes: list[str] | None = None,
+        state_payload: Dict[str, Any] | None = None,
     ) -> Dict[str, str]:
         """
         Generate OAuth authorization URL with PKCE and state.
@@ -451,7 +476,7 @@ query ($username: String!) {
         config = self._get_provider_config(provider)
 
         # Generate state for CSRF protection
-        state = self.generate_state()
+        state = self.generate_state(payload=state_payload)
 
         # Build authorization URL
         params = {
@@ -486,7 +511,7 @@ query ($username: String!) {
             OAuthProviderError: If token exchange fails
         """
         # Validate state first
-        self.validate_state(state)
+        state_payload = self.validate_state(state)
 
         config = self._get_provider_config(provider)
 
@@ -534,10 +559,19 @@ query ($username: String!) {
             except httpx.HTTPError as e:
                 raise OAuthProviderError(f"Failed to get user info: {e}")
 
-        return {"tokens": tokens, "user_info": user_info, "provider": provider}
+        return {
+            "tokens": tokens,
+            "user_info": user_info,
+            "provider": provider,
+            "state_payload": state_payload,
+        }
 
     async def find_or_create_user(
-        self, provider: str, user_info: Dict[str, Any], tokens: Dict[str, Any]
+        self,
+        provider: str,
+        user_info: Dict[str, Any],
+        tokens: Dict[str, Any],
+        state_payload: Dict[str, Any] | None = None,
     ) -> User:
         """
         Find existing user or create new user from OAuth data.
@@ -553,6 +587,20 @@ query ($username: String!) {
         provider_id = user_info["id"]
         email = user_info["email"]
 
+        linked_user: User | None = None
+        if (
+            provider == "github"
+            and state_payload
+            and state_payload.get("intent") == "github_connect"
+        ):
+            linked_user_id = state_payload.get("user_id")
+            if not linked_user_id:
+                raise ValueError("GitHub connection requires a user id")
+
+            linked_user = await self.user_repo.get_by_id(linked_user_id)
+            if not linked_user or not linked_user.is_active:
+                raise ValueError("User not found for GitHub connection")
+
         # Try to find existing OAuth account
         existing_oauth = await self.db.execute(
             select(OAuthAccount).where(
@@ -565,6 +613,8 @@ query ($username: String!) {
         oauth_account = existing_oauth.scalar_one_or_none()
 
         if oauth_account:
+            if linked_user and oauth_account.user_id != linked_user.id:
+                raise ValueError("GitHub account already linked to another user")
             # Update existing OAuth account with new tokens
             oauth_account.access_token = tokens.get("access_token")
             oauth_account.refresh_token = tokens.get("refresh_token")
@@ -600,22 +650,40 @@ query ($username: String!) {
                 raise ValueError("Linked OAuth user not found")
             return user
 
-        # Try to find user by email (account linking)
-        existing_user = await self.user_repo.get_by_email(email)
-
-        if existing_user:
-            # Link OAuth account to existing user
-            user = existing_user
-        else:
-            # Create new user
-            user = await self.user_repo.create_oauth_user(
-                email=email,
-                full_name=user_info.get("name"),
-                profile_picture_url=user_info.get("picture"),
-                oauth_provider=provider,
-                oauth_id=provider_id,
-                email_verified=user_info.get("email_verified", True),
+        if linked_user:
+            existing_link = await self.db.execute(
+                select(OAuthAccount).where(
+                    and_(
+                        OAuthAccount.user_id == linked_user.id,
+                        OAuthAccount.provider == provider,
+                    )
+                )
             )
+            existing_linked_account = existing_link.scalar_one_or_none()
+            if (
+                existing_linked_account
+                and existing_linked_account.provider_account_id != provider_id
+            ):
+                raise ValueError("A different GitHub account is already linked")
+
+            user = linked_user
+        else:
+            # Try to find user by email (account linking)
+            existing_user = await self.user_repo.get_by_email(email)
+
+            if existing_user:
+                # Link OAuth account to existing user
+                user = existing_user
+            else:
+                # Create new user
+                user = await self.user_repo.create_oauth_user(
+                    email=email,
+                    full_name=user_info.get("name"),
+                    profile_picture_url=user_info.get("picture"),
+                    oauth_provider=provider,
+                    oauth_id=provider_id,
+                    email_verified=user_info.get("email_verified", True),
+                )
 
         # Create OAuth account record
         granted_scopes = (
@@ -663,6 +731,7 @@ query ($username: String!) {
             provider=provider,
             user_info=oauth_data["user_info"],
             tokens=oauth_data["tokens"],
+            state_payload=oauth_data.get("state_payload"),
         )
 
         # Generate our application's JWT token
@@ -683,7 +752,10 @@ query ($username: String!) {
         }
 
     async def get_authorization_url(
-        self, provider: str = "google", scopes: list[str] | None = None
+        self,
+        provider: str = "google",
+        scopes: list[str] | None = None,
+        state_payload: Dict[str, Any] | None = None,
     ) -> tuple[str, str]:
         """
         Generate OAuth authorization URL.
@@ -694,7 +766,9 @@ query ($username: String!) {
         Returns:
             Tuple of (authorization_url, state)
         """
-        auth_data = self.generate_authorization_url(provider=provider, scopes=scopes)
+        auth_data = self.generate_authorization_url(
+            provider=provider, scopes=scopes, state_payload=state_payload
+        )
         return auth_data["url"], auth_data["state"]
 
     async def get_github_profile_sync_status(self, user_id: str) -> Dict[str, Any]:
@@ -704,7 +778,9 @@ query ($username: String!) {
 
         if not oauth_account or not oauth_account.access_token:
             authorization_url, state = await self.get_authorization_url(
-                provider="github", scopes=required_scopes
+                provider="github",
+                scopes=required_scopes,
+                state_payload={"intent": "github_connect", "user_id": user_id},
             )
             return {
                 "status": "authorization_required",
@@ -719,7 +795,9 @@ query ($username: String!) {
 
         if oauth_account.token_expires_at and oauth_account.token_expires_at < datetime.now(timezone.utc):
             authorization_url, state = await self.get_authorization_url(
-                provider="github", scopes=required_scopes
+                provider="github",
+                scopes=required_scopes,
+                state_payload={"intent": "github_connect", "user_id": user_id},
             )
             return {
                 "status": "authorization_required",
@@ -736,7 +814,9 @@ query ($username: String!) {
         missing_scopes = self._missing_scopes(granted_scopes, required_scopes)
         if missing_scopes:
             authorization_url, state = await self.get_authorization_url(
-                provider="github", scopes=required_scopes
+                provider="github",
+                scopes=required_scopes,
+                state_payload={"intent": "github_connect", "user_id": user_id},
             )
             return {
                 "status": "scope_upgrade_required",
@@ -768,7 +848,9 @@ query ($username: String!) {
         except OAuthProviderError as e:
             if "updated OAuth permissions" in str(e):
                 authorization_url, state = await self.get_authorization_url(
-                    provider="github", scopes=required_scopes
+                    provider="github",
+                    scopes=required_scopes,
+                    state_payload={"intent": "github_connect", "user_id": user_id},
                 )
                 return {
                     "status": "scope_upgrade_required",
@@ -854,6 +936,7 @@ query ($username: String!) {
             provider=provider,
             user_info=oauth_data["user_info"],
             tokens=oauth_data["tokens"],
+            state_payload=oauth_data.get("state_payload"),
         )
 
         # Determine if this is a new user (created in this session)
