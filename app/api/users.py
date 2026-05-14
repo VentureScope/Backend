@@ -6,7 +6,7 @@ Handles user profile operations (self-service).
 import json
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, Body, UploadFile, File
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -111,16 +111,20 @@ async def change_password(
 
 
 class DeleteAccountRequest(BaseModel):
-    """Request body for account deletion."""
+    """Request body for account deletion.
 
-    password: str
+    password is only required for email/password accounts.
+    OAuth-only accounts can delete without supplying a password.
+    """
+
+    password: str | None = None
 
 
 @router.delete("/me", response_model=MessageResponse)
 async def delete_current_user_account(
-    data: DeleteAccountRequest,
     current_user: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    data: DeleteAccountRequest = Body(...),
 ):
     """
     Delete current user's account (soft delete).

@@ -5,8 +5,18 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.security import decode_access_token_with_details, TokenError
+from app.core.security import decode_access_token_with_details, hash_password, TokenError
 from app.schemas.user import UserCreate, UserLogin, UserResponse, Token
+from app.schemas.otp import (
+    OtpVerifyRequest,
+    OtpVerifyResponse,
+    OtpResendRequest,
+    OtpResendResponse,
+    ForgotPasswordRequest,
+    ForgotPasswordResponse,
+    ResetPasswordRequest,
+    ResetPasswordResponse,
+)
 from app.schemas.oauth import (
     OAuthLoginResponse,
     OAuthCallbackRequest,
@@ -14,15 +24,28 @@ from app.schemas.oauth import (
 )
 from app.services.auth_service import AuthService
 from app.services.oauth_service import OAuthService
+from app.services.otp_service import (
+    OTPService,
+    OTPExpiredError,
+    OTPInvalidError,
+    OTPResendCooldownError,
+    OTPResendLimitError,
+    get_otp_service,
+)
 from app.repositories.token_repository import TokenRepository
+from app.repositories.user_repository import UserRepository
 
 router = APIRouter()
 security = HTTPBearer()
 
 
-@router.post("/register", response_model=UserResponse)
-async def register(data: UserCreate, db: AsyncSession = Depends(get_db)):
-    service = AuthService(db)
+@router.post("/register", response_model=UserResponse, status_code=201)
+async def register(
+    data: UserCreate,
+    db: AsyncSession = Depends(get_db),
+    otp_service: OTPService = Depends(get_otp_service),
+):
+    service = AuthService(db, otp_service=otp_service)
     try:
         user = await service.register(data)
         return user
@@ -36,8 +59,130 @@ async def login(data: UserLogin, db: AsyncSession = Depends(get_db)):
     try:
         token = await service.login(data)
         return Token(access_token=token)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
     except ValueError:
         raise HTTPException(status_code=401, detail="Invalid email or password")
+
+
+@router.post("/verify-email", response_model=OtpVerifyResponse)
+async def verify_email(
+    data: OtpVerifyRequest,
+    db: AsyncSession = Depends(get_db),
+    otp_service: OTPService = Depends(get_otp_service),
+):
+    """Verify a user's email address using the OTP sent during registration."""
+    repo = UserRepository(db)
+    user = await repo.get_by_email(data.email)
+
+    if not user or not user.is_active:
+        raise HTTPException(status_code=404, detail="User not found.")
+
+    if user.is_verified:
+        raise HTTPException(status_code=400, detail="Email is already verified.")
+
+    try:
+        await otp_service.verify_otp(user, data.otp)
+    except OTPExpiredError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except OTPInvalidError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    user.is_verified = True
+    await db.commit()
+
+    return OtpVerifyResponse()
+
+
+@router.post("/otp/resend", response_model=OtpResendResponse)
+async def resend_otp(
+    data: OtpResendRequest,
+    db: AsyncSession = Depends(get_db),
+    otp_service: OTPService = Depends(get_otp_service),
+):
+    """Resend the OTP verification email. Subject to rate-limiting."""
+    repo = UserRepository(db)
+    user = await repo.get_by_email(data.email)
+
+    # Always return 200 even if user is not found — prevents email enumeration
+    if not user or not user.is_active:
+        return OtpResendResponse()
+
+    if user.is_verified:
+        raise HTTPException(status_code=400, detail="Email is already verified.")
+
+    try:
+        await otp_service.resend_otp(user)
+    except OTPResendCooldownError as e:
+        raise HTTPException(status_code=429, detail=str(e))
+    except OTPResendLimitError as e:
+        raise HTTPException(status_code=429, detail=str(e))
+
+    return OtpResendResponse()
+
+
+@router.post("/forgot-password", response_model=ForgotPasswordResponse)
+async def forgot_password(
+    data: ForgotPasswordRequest,
+    db: AsyncSession = Depends(get_db),
+    otp_service: OTPService = Depends(get_otp_service),
+):
+    """Request a password-reset code.
+
+    Always returns 200 with a generic message regardless of whether the
+    email exists.  This prevents user-enumeration attacks.
+    """
+    repo = UserRepository(db)
+    user = await repo.get_by_email(data.email)
+
+    # Silently succeed if user doesn't exist or is inactive
+    if not user or not user.is_active:
+        return ForgotPasswordResponse()
+
+    # Don't allow password reset for OAuth-only accounts
+    if user.password_hash is None:
+        return ForgotPasswordResponse()
+
+    try:
+        await otp_service.send_password_reset_otp(user)
+    except Exception:
+        # Swallow errors to prevent enumeration; logged inside OTPService
+        pass
+
+    return ForgotPasswordResponse()
+
+
+@router.post("/reset-password", response_model=ResetPasswordResponse)
+async def reset_password(
+    data: ResetPasswordRequest,
+    db: AsyncSession = Depends(get_db),
+    otp_service: OTPService = Depends(get_otp_service),
+):
+    """Verify the reset code and set a new password."""
+    repo = UserRepository(db)
+    user = await repo.get_by_email(data.email)
+
+    if not user or not user.is_active:
+        raise HTTPException(status_code=404, detail="User not found.")
+
+    if user.password_hash is None:
+        raise HTTPException(
+            status_code=400,
+            detail="This account uses OAuth login. Password reset is not available.",
+        )
+
+    try:
+        await otp_service.verify_password_reset_otp(user, data.otp)
+    except OTPExpiredError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except OTPInvalidError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    # OTP valid — update password
+    user.password_hash = hash_password(data.new_password)
+    await db.commit()
+
+    return ResetPasswordResponse()
 
 
 @router.post("/logout", status_code=200)

@@ -1,0 +1,15 @@
+VentureScope – Email Verification
+==================================
+
+Hi {{full_name}},
+
+Thanks for signing up! Use the code below to verify your email address.
+
+Your verification code: {{otp_code}}
+
+This code expires in {{expire_minutes}} minutes.
+
+If you did not create a VentureScope account, you can safely ignore this email.
+
+--
+© {{year}} VentureScope. All rights reserved.
