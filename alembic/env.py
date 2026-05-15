@@ -31,6 +31,9 @@ from app.models.academic_transcript import AcademicTranscript
 from app.models.transcript_config import TranscriptConfig
 from app.models.github_sync_snapshot import GitHubSyncSnapshot
 from app.models.experience import Experience
+from app.models.job import Job
+from app.models.roadmap import LearningRoadmap, LearningRoadmapStep, LearningRoadmapStepResource, LearningRoadmapProgress
+from app.models.resume import Resume
 
 # Set target metadata for autogenerate
 from app.core.database import Base
@@ -84,10 +87,8 @@ def do_run_migrations(connection: Connection) -> None:
 
 async def run_async_migrations() -> None:
     """Run migrations in async mode."""
-    # Get database URL
     url = config.get_main_option("sqlalchemy.url")
 
-    # Create async engine
     connectable = create_async_engine(url, poolclass=pool.NullPool)
 
     async with connectable.connect() as connection:
@@ -97,13 +98,7 @@ async def run_async_migrations() -> None:
 
 
 def run_migrations_online() -> None:
-    """Run migrations in 'online' mode.
-
-    In this scenario we need to create an Engine
-    and associate a connection with the context.
-
-    """
-    # Run async migrations
+    """Run migrations in 'online' mode."""
     asyncio.run(run_async_migrations())
 
 

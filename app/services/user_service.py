@@ -291,25 +291,34 @@ class UserService:
         await self.repo.update(user)
         return True
 
-    async def delete_account(self, user_id: str, password: str) -> bool:
+    async def delete_account(self, user_id: str, password: str | None) -> bool:
         """
-        Delete user's own account.
-        Requires password verification for security.
-        Uses soft delete (sets is_active=False).
+        Delete user's own account (soft delete).
+
+        - Email/password accounts: password required for verification.
+        - OAuth-only accounts (password_hash is None): no password needed.
         """
         user = await self.repo.get_by_id(user_id)
         if not user:
             raise ValueError("User not found for account deletion")
 
-        # Verify password before deletion
-        if not verify_password(password, user.password_hash):
-            raise ValueError("Password is incorrect")
+        if not user.is_active:
+            raise ValueError("Account is already deactivated")
 
-        # Delete CV if exists
+        if user.password_hash is not None:
+            # Email/password account — require password confirmation
+            if not password:
+                raise ValueError(
+                    "Password is required to delete an email/password account."
+                )
+            if not verify_password(password, user.password_hash):
+                raise ValueError("Incorrect password.")
+
+        # Delete S3 assets
         if user.cv_url:
             await self.s3_service.delete_cv(user.cv_url)
 
-        # Soft delete - set is_active to False
+        # Soft delete — set is_active to False
         user.is_active = False
         await self.repo.update(user)
         return True

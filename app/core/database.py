@@ -7,11 +7,24 @@ from sqlalchemy.orm import DeclarativeBase
 
 from app.core.config import settings
 
-engine = create_async_engine(
-    settings.DATABASE_URL,
-    echo=settings.DEBUG,
-    pool_pre_ping=True,
-)
+def get_engine():
+    """Create async engine with proper settings for PgBouncer."""
+    database_url = settings.DATABASE_URL
+    if "?" in database_url:
+        base, query = database_url.split("?", 1)
+        params = [p for p in query.split("&") if not p.startswith("ssl=")]
+        params.append("prepared_statement_cache_size=0")
+        database_url = base + "?" + "&".join(params)
+    else:
+        database_url += "?prepared_statement_cache_size=0"
+    return create_async_engine(
+        database_url,
+        echo=settings.DEBUG,
+        pool_pre_ping=True,
+        connect_args={"ssl": "require", "statement_cache_size": 0},
+    )
+
+engine = get_engine()
 
 AsyncSessionLocal = async_sessionmaker(
     engine,

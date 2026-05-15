@@ -45,9 +45,15 @@ class User(Base):
     )  # For OAuth profile images
     github_username: Mapped[str | None] = mapped_column(String(255), nullable=True)
     career_interest: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    skills: Mapped[list | None] = mapped_column(JSON, nullable=True)  # List of skill strings
-    cv_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)  # S3 URL for CV
-    estudent_profile: Mapped[str | None] = mapped_column(String(1000), nullable=True)  # E-student summarized profile
+    skills: Mapped[list | None] = mapped_column(
+        JSON, nullable=True
+    )  # List of skill strings
+    cv_url: Mapped[str | None] = mapped_column(
+        String(1000), nullable=True
+    )  # S3 URL for CV
+    estudent_profile: Mapped[str | None] = mapped_column(
+        String(1000), nullable=True
+    )  # E-student summarized profile
 
     # Store generated similarity embedding using pgvector
     embedding: Mapped[list[float] | None] = mapped_column(
@@ -60,9 +66,7 @@ class User(Base):
     )  # pending, completed, failed
 
     # Social media links (JSON): {"linkedin": "url", "twitter": "url", "portfolio": "url"}
-    social_links: Mapped[dict | None] = mapped_column(
-        String(2000), nullable=True
-    )
+    social_links: Mapped[dict | None] = mapped_column(String(2000), nullable=True)
 
     # OAuth fields
     oauth_provider: Mapped[str | None] = mapped_column(
@@ -79,6 +83,9 @@ class User(Base):
     )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_verified: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )  # True after OTP email verification (or OAuth signup)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
