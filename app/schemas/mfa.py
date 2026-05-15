@@ -47,6 +47,7 @@ class MFAVerifyResponse(BaseModel):
 class MFAEnrollVerifyRequest(BaseModel):
     factor_id: str
     code: str
+    friendly_name: str | None = None
 
 
 class MFAEnrollVerifyResponse(BaseModel):

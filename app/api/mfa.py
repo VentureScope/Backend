@@ -90,7 +90,9 @@ async def mfa_enroll_verify(
     from app.api.deps_mfa import promote_to_aal2
     service = MFAService(db)
     try:
-        await service.enroll_verify(current_user.id, data.factor_id, data.code)
+        await service.enroll_verify(
+            current_user.id, data.factor_id, data.code, data.friendly_name
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 

@@ -148,7 +148,9 @@ class MFAService:
 
     # -- Enroll Verify (challengeAndVerify) ------------------------------------
 
-    async def enroll_verify(self, user_id: str, factor_id: str, code: str) -> bool:
+    async def enroll_verify(
+        self, user_id: str, factor_id: str, code: str, friendly_name: str | None = None
+    ) -> bool:
         """Verify the first code after enrollment — marks factor as verified."""
         await _ensure_factors_table(self._db)
 
@@ -167,8 +169,10 @@ class MFAService:
             raise ValueError("Invalid or expired TOTP code.")
 
         await self._db.execute(
-            text("UPDATE mfa_factors SET verified = TRUE WHERE id = :fid"),
-            {"fid": factor_id},
+            text(
+                "UPDATE mfa_factors SET verified = TRUE, friendly_name = :fname WHERE id = :fid"
+            ),
+            {"fid": factor_id, "fname": friendly_name},
         )
         await self._db.commit()
 
