@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Confirm your identity</title>
+    <style>
+        body { font-family: sans-serif; line-height: 1.6; color: #333; }
+        .container { max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #eee; border-radius: 10px; }
+        .header { text-align: center; margin-bottom: 30px; }
+        .code { font-size: 32px; font-weight: bold; letter-spacing: 5px; color: #1d59db; text-align: center; margin: 30px 0; padding: 20px; background: #f0f4ff; border-radius: 8px; }
+        .footer { font-size: 12px; color: #999; text-align: center; margin-top: 30px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Confirm your identity</h1>
+        </div>
+        <p>Hello {{full_name}},</p>
+        <p>A request was made to perform a sensitive action on your VentureScope account (such as disabling two-factor authentication or deleting your account).</p>
+        <p>Please use the following code to confirm it's really you:</p>
+        <div class="code">{{otp_code}}</div>
+        <p>This code will expire in {{expire_minutes}} minutes. If you did not make this request, please ignore this email and ensure your account is secure.</p>
+        <div class="footer">
+            &copy; {{year}} VentureScope. All rights reserved.
+        </div>
+    </div>
+</body>
+</html>

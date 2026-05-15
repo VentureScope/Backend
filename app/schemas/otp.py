@@ -78,3 +78,29 @@ class ResetPasswordResponse(BaseModel):
     """Response body for a successful password reset."""
 
     message: str = "Password reset successfully. You can now sign in."
+
+
+# ==================== Re-authentication Schemas ====================
+
+
+class ReauthRequest(BaseModel):
+    """Request to initiate re-authentication.
+    If password is provided, it attempts immediate verification.
+    If not, it sends an OTP to the user's email.
+    """
+
+    password: str | None = None
+
+
+class ReauthResponse(BaseModel):
+    """Response for re-auth initiation."""
+
+    status: str  # "verified" or "otp_sent"
+    message: str
+
+
+class ReauthVerifyRequest(BaseModel):
+    """Request to verify a re-auth OTP."""
+
+    otp: str = Field(..., min_length=6, max_length=6, pattern=r"^\d{6}$")
+

@@ -32,6 +32,7 @@ class TokenPayload:
     sub: str  # Subject (user ID)
     jti: str  # JWT ID (unique token identifier)
     exp: datetime  # Expiration time
+    remember: bool = False
 
 
 @dataclass
@@ -56,7 +57,9 @@ def verify_password(plain: str, hashed: str) -> bool:
 
 
 def create_access_token(
-    subject: str | Any, expires_delta: timedelta | None = None
+    subject: str | Any,
+    expires_delta: timedelta | None = None,
+    extra_claims: dict[str, Any] | None = None,
 ) -> str:
     """
     Create a JWT access token with JTI for revocation support.
@@ -64,6 +67,7 @@ def create_access_token(
     Args:
         subject: The subject claim (typically user ID)
         expires_delta: Optional custom expiration time
+        extra_claims: Optional dict of extra claims
 
     Returns:
         Encoded JWT token string
@@ -77,6 +81,9 @@ def create_access_token(
         "sub": str(subject),
         "jti": jti,
     }
+    if extra_claims:
+        to_encode.update(extra_claims)
+
     return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 
 
@@ -127,6 +134,7 @@ def decode_access_token_with_details(token: str) -> TokenValidationResult:
         sub = payload.get("sub")
         jti = payload.get("jti")
         exp = payload.get("exp")
+        remember = payload.get("remember", False)
 
         if not sub or not jti or not exp:
             return TokenValidationResult(
@@ -138,7 +146,9 @@ def decode_access_token_with_details(token: str) -> TokenValidationResult:
         # Convert exp timestamp to datetime
         exp_datetime = datetime.fromtimestamp(exp, tz=timezone.utc)
 
-        token_payload = TokenPayload(sub=sub, jti=jti, exp=exp_datetime)
+        token_payload = TokenPayload(
+            sub=sub, jti=jti, exp=exp_datetime, remember=remember
+        )
         return TokenValidationResult(
             payload=token_payload, error_type=None, error_message=None
         )

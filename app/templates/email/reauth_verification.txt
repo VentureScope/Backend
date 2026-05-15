@@ -1,0 +1,14 @@
+Confirm your identity – VentureScope
+
+Hello {{full_name}},
+
+A request was made to perform a sensitive action on your VentureScope account.
+Please use the following code to confirm it's really you:
+
+{{otp_code}}
+
+This code will expire in {{expire_minutes}} minutes.
+
+If you did not make this request, please ignore this email.
+
+© {{year}} VentureScope

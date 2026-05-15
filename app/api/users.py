@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.api.deps_mfa import require_aal2
 from app.core.database import get_db
 from app.models.user import User
 from app.schemas.user import (
@@ -89,7 +90,7 @@ async def update_current_user_profile(
 @router.put("/me/password", response_model=MessageResponse)
 async def change_password(
     data: PasswordChange,
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(require_aal2)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """
@@ -122,7 +123,7 @@ class DeleteAccountRequest(BaseModel):
 
 @router.delete("/me", response_model=MessageResponse)
 async def delete_current_user_account(
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(require_aal2)],
     db: Annotated[AsyncSession, Depends(get_db)],
     data: DeleteAccountRequest = Body(...),
 ):
