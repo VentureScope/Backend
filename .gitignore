@@ -90,3 +90,31 @@ alembic/versions/__pycache__/
 temp/
 tmp/
 .temp/
+
+# CSV data
+csv-data/
+csv_data/
+
+# Generated / utility
+test_gh.py
+export_openapi.py
+Dockerfile.test
+
+# Sphinx docs
+docs/_build/
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+
+# PyInstaller
+*.manifest
+*.spec
+
+# mypy
+.mypy_cache/
+
+# ruff
+.ruff_cache/
+
+# Coverage (duplicate prevention)
+.coverage
