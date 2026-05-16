@@ -27,7 +27,9 @@ from app.repositories.knowledge_repository import KnowledgeRepository
 from app.services.notification_service import NotificationService
 from app.services.embedding_service import get_embedding_service
 from app.services.hosted_llm import HostedLLM
+from app.services.search_service import perform_web_search
 from app.services.knowledge_retriever import UserKnowledgeRetriever
+from langgraph.prebuilt import create_react_agent
 
 logger = logging.getLogger(__name__)
 
@@ -179,28 +181,34 @@ class ChatService:
             elif msg.role == "assistant":
                 lc_history.append(AIMessage(content=msg.content))
 
-        # 5. Build LangChain ChatPromptTemplate
+        # 5. Build system prompt
         system_prompt = _build_system_prompt(user, relevant_context)
-        prompt_template = ChatPromptTemplate.from_messages([
-            ("system", system_prompt),
-            MessagesPlaceholder(variable_name="history"),
-            ("human", "{question}"),
-        ])
 
-        # 6. Stream using LCEL pipeline mapping HostedLLM
+        # 6. Stream using LangGraph tool-calling agent
         llm = HostedLLM()
-        chain = prompt_template | llm
+        agent = create_react_agent(
+            model=llm, 
+            tools=[perform_web_search], 
+            prompt=system_prompt
+        )
+        
+        # Combine history and the new message
+        messages = lc_history + [HumanMessage(content=user_message)]
         
         full_reply = ""
         try:
-            # Execute async streaming through LCEL pipeline
-            async for chunk in chain.astream({"question": user_message, "history": lc_history}):
-                if chunk:
-                    full_reply += str(chunk)
-                    await on_chunk(str(chunk))
+            # Execute async streaming through LangGraph pipeline, looking for text generation events
+            async for event in agent.astream_events({"messages": messages}, version="v2"):
+                # We specifically look for language model text streaming events
+                if event["event"] == "on_chat_model_stream":
+                    chunk = event["data"]["chunk"]
+                    if getattr(chunk, "content", None):
+                        content_str = str(chunk.content)
+                        full_reply += content_str
+                        await on_chunk(content_str)
         except Exception as e:
-            logger.error(f"LangChain streaming error for session={session_id}: {e}")
-            raise RuntimeError(f"LangChain error: {e}") from e
+            logger.error(f"LangGraph streaming error for session={session_id}: {e}")
+            raise RuntimeError(f"LangGraph error: {e}") from e
 
         # 7. Persist the complete assistant reply
         assistant_msg = await self.repo.add_message(

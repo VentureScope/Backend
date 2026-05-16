@@ -1,14 +1,22 @@
 import asyncio
 import json
 from sqlalchemy.ext.asyncio import AsyncSession
+from langchain_core.messages import HumanMessage
+from langgraph.prebuilt import create_react_agent
+
+from typing import Any
+from collections.abc import Sequence
 
 from app.services.hosted_llm import HostedLLM
+from app.services.search_service import perform_web_search
 from app.core.config import settings
 from app.repositories.roadmap_repository import RoadmapRepository
 from app.repositories.job_repository import JobRepository
 from app.models.roadmap import LearningRoadmap
 
 ROADMAP_SYSTEM_PROMPT = """You are a career advisor. Generate a personalized learning roadmap.
+
+You MUST use the provided web search tool to find real, working, up-to-date links for the resources (courses, articles, documentation, videos) you recommend. Do not invent or hallucinate URLs.
 
 Based on the user's current skills, the trending career they selected, and market demand data, create a structured week-by-week learning roadmap.
 
@@ -33,7 +41,10 @@ The roadmap must be valid JSON with this exact structure:
   ]
 }
 
-Generate 8-12 weeks. Each week must have 2-4 resources. Return ONLY valid JSON, no markdown or explanation."""
+Generates up to 8 weeks. Each week must have exactly 2 resources. 
+
+CRITICAL INSTRUCTION FOR URLs: 
+You MUST call the `perform_web_search` tool BEFORE generating the JSON to find working, real URLs (e.g., links to Udemy, Coursera, freeCodeCamp, official docs) for every resource you intend to include. Do NOT output empty strings for URLs. Wait for the tool to return results, then use those links in your final JSON output. Return ONLY valid JSON, no markdown or explanation."""
 
 
 class RoadmapService:
@@ -148,31 +159,67 @@ class RoadmapService:
             f"User's current skills: {user_skills_text}"
             f"{trend_stats_text}\n\n"
             f"Generate a comprehensive roadmap that bridges the gap between "
-            f"the user's current skills and the target career."
+            f"the user's current skills and the target career. Please look up real resources to include as links."
         )
-
-        full_prompt = f"{ROADMAP_SYSTEM_PROMPT}\n\n{user_prompt}"
 
         llm = HostedLLM(
             model=settings.CHAT_MODEL_NAME,
             temperature=0.7,
             max_tokens=4000,
         )
-        response = await asyncio.to_thread(llm.invoke, full_prompt)
+        
+        agent = create_react_agent(
+            model=llm,
+            tools=[perform_web_search],
+            prompt=ROADMAP_SYSTEM_PROMPT
+        )
+        
+        messages = [HumanMessage(content=user_prompt)]
+        
+        # Increase timeout or try to give it more time if it uses multiple tool calls
+        result = await agent.ainvoke({"messages": messages})
+        
+        import re
+        # Find the last message from the assistant that actually contains the JSON
+        final_content = ""
+        for msg in reversed(result["messages"]):
+            if getattr(msg, "content", "") and "{" in str(msg.content):
+                final_content = msg.content
+                break
+                
+        if not final_content:
+            final_content = result["messages"][-1].content
 
-        cleaned = self._clean_response(response)
-        return json.loads(cleaned)
+        cleaned = self._clean_response(final_content)
+        try:
+            return json.loads(cleaned)
+        except json.JSONDecodeError as e:
+            # If it still fails, the LLM probably got cut off via token limit
+            # or the model output invalid JSON escaping. Log the error.
+            print(f"JSON Parsing Error. Raw content: {cleaned}")
+            raise e
 
     @staticmethod
-    def _clean_response(content: str) -> str:
-        cleaned = content.strip()
-        if cleaned.startswith("```"):
-            cleaned = cleaned.split("\n", 1)[1]
-        if cleaned.endswith("```"):
-            cleaned = cleaned.rsplit("```", 1)[0]
-        cleaned = cleaned.strip()
-        if cleaned.startswith("```json"):
-            cleaned = cleaned[7:].strip()
-            if cleaned.endswith("```"):
-                cleaned = cleaned[:-3].strip()
+    def _clean_response(content: Any) -> str:
+        if hasattr(content, "content"):  # In case an AIMessage object slips through
+            content = content.content
+            
+        cleaned = str(content).strip()
+        
+        # Handle ```json ... ``` blocks
+        if "```json" in cleaned:
+            cleaned = cleaned.split("```json")[-1]
+            if "```" in cleaned:
+                cleaned = cleaned.split("```")[0]
+        elif "```" in cleaned:
+            # Handle generic ``` ... ``` blocks
+            parts = cleaned.split("```")
+            if len(parts) >= 3:
+                cleaned = parts[1]
+                # Sometimes the first line is language name, strip it
+                if "\n" in cleaned:
+                    first_line = cleaned.split("\n", 1)[0].strip()
+                    if not first_line.startswith("{") and not first_line.startswith("["):
+                        cleaned = cleaned.split("\n", 1)[1]
+                        
         return cleaned.strip()

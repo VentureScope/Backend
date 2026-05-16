@@ -21,7 +21,11 @@ def get_engine():
         database_url,
         echo=settings.DEBUG,
         pool_pre_ping=True,
-        connect_args={"ssl": "require", "statement_cache_size": 0},
+        connect_args={
+            "ssl": "require", 
+            "statement_cache_size": 0,
+            "prepared_statement_cache_size": 0
+        },
     )
 
 engine = get_engine()

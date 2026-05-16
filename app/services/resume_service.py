@@ -145,15 +145,28 @@ Generate a professional resume that highlights the user's relevant experience an
         return await asyncio.to_thread(llm.invoke, full_prompt)
 
 
-def _clean_llm_response(content: str) -> str:
-    cleaned = content.strip()
-    if cleaned.startswith("```"):
-        cleaned = cleaned.split("\n", 1)[1]
-    if cleaned.endswith("```"):
-        cleaned = cleaned.rsplit("```", 1)[0]
-    cleaned = cleaned.strip()
-    if cleaned.startswith("```json"):
-        cleaned = cleaned[7:].strip()
-        if cleaned.endswith("```"):
-            cleaned = cleaned[:-3].strip()
+from typing import Any
+
+def _clean_llm_response(content: Any) -> str:
+    if hasattr(content, "content"):
+        content = content.content
+        
+    cleaned = str(content).strip()
+    
+    # Handle ```json ... ``` blocks
+    if "```json" in cleaned:
+        cleaned = cleaned.split("```json")[-1]
+        if "```" in cleaned:
+            cleaned = cleaned.split("```")[0]
+    elif "```" in cleaned:
+        # Handle generic ``` ... ``` blocks
+        parts = cleaned.split("```")
+        if len(parts) >= 3:
+            cleaned = parts[1]
+            # Sometimes the first line is language name, strip it
+            if "\n" in cleaned:
+                first_line = cleaned.split("\n", 1)[0].strip()
+                if not first_line.startswith("{") and not first_line.startswith("["):
+                    cleaned = cleaned.split("\n", 1)[1]
+                    
     return cleaned.strip()
