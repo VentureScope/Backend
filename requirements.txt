@@ -23,6 +23,7 @@ pydantic-settings==2.6.1
 
 # OAuth 2.0
 authlib==1.3.2
+pyotp==2.9.0
 
 # Utils
 python-dotenv==1.0.1

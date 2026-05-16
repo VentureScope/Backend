@@ -120,6 +120,19 @@ class OTPService:
         return f"pwd_reset_count:{user_id}"
 
     # ------------------------------------------------------------------
+    # Key builders – re-authentication (for sensitive actions)
+    # ------------------------------------------------------------------
+
+    def _reauth_key(self, user_id: str) -> str:
+        return f"reauth:{user_id}"
+
+    def _reauth_cooldown_key(self, user_id: str) -> str:
+        return f"reauth_cooldown:{user_id}"
+
+    def _reauth_count_key(self, user_id: str) -> str:
+        return f"reauth_count:{user_id}"
+
+    # ------------------------------------------------------------------
     # Shared helpers
     # ------------------------------------------------------------------
 
@@ -362,9 +375,61 @@ class OTPService:
             raise OTPInvalidError("Invalid reset code.")
 
         # One-time use
-        await self._redis.delete(self._pwd_reset_key(user.id))
-        await self._redis.delete(self._pwd_reset_cooldown_key(user.id))
-        await self._redis.delete(self._pwd_reset_count_key(user.id))
+        await self._redis.delete(self._pwd_reset_key(user_id))
+        await self._redis.delete(self._pwd_reset_cooldown_key(user_id))
+        await self._redis.delete(self._pwd_reset_count_key(user_id))
+
+    # ------------------------------------------------------------------
+    # Core operations – re-authentication
+    # ------------------------------------------------------------------
+
+    async def _send_reauth_email(self, user: User, code: str) -> None:
+        """Render re-auth templates and dispatch the email."""
+        context = self._build_email_context(user, code)
+        # Reuse password reset templates if reauth ones don't exist yet,
+        # but let's assume we might want a different subject.
+        html_body = _render_template("reauth_verification.html", context)
+        text_body = _render_template("reauth_verification.txt", context)
+
+        provider = get_email_provider()
+        await provider.send_email(
+            to=user.email,
+            subject="Confirm your identity – VentureScope",
+            html=html_body,
+            text=text_body,
+        )
+
+    async def send_reauth_otp(self, user: User) -> None:
+        """Generate and send a re-authentication OTP."""
+        code = self._generate_code()
+        await self._redis.set(
+            self._reauth_key(user.id),
+            code,
+            ex=settings.OTP_EXPIRE_MINUTES * 60,
+        )
+
+        try:
+            await self._send_reauth_email(user, code)
+        except Exception:
+            logger.exception("Failed to send reauth email to user %s", user.id)
+            raise
+
+    async def verify_reauth_otp(self, user: User, submitted_code: str) -> bool:
+        """Validate the submitted re-auth OTP."""
+        stored_code = await self._redis.get(self._reauth_key(user.id))
+
+        if stored_code is None:
+            raise OTPExpiredError("Re-authentication code has expired or was never issued.")
+
+        if isinstance(stored_code, bytes):
+            stored_code = stored_code.decode()
+
+        if not secrets.compare_digest(stored_code, submitted_code.strip()):
+            raise OTPInvalidError("Invalid re-authentication code.")
+
+        # One-time use
+        await self._redis.delete(self._reauth_key(user.id))
+        return True
 
 
 # ---------------------------------------------------------------------------

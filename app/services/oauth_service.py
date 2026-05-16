@@ -769,6 +769,8 @@ query ($username: String!) {{
                 "is_active": user.is_active,
                 "email_verified": user.email_verified,
                 "oauth_provider": user.oauth_provider,
+                "mfa_enabled": user.mfa_enabled,
+                "mfa_enrolled_at": user.mfa_enrolled_at.isoformat() if user.mfa_enrolled_at else None,
             },
         }
 

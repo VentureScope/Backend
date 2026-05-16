@@ -7,6 +7,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.security import decode_access_token_with_details, hash_password, TokenError
 from app.schemas.user import UserCreate, UserLogin, UserResponse, Token
+from app.schemas.oauth import (
+    OAuthLoginResponse,
+    OAuthCallbackRequest,
+    OAuthCallbackResponse,
+)
 from app.schemas.otp import (
     OtpVerifyRequest,
     OtpVerifyResponse,
@@ -16,12 +21,12 @@ from app.schemas.otp import (
     ForgotPasswordResponse,
     ResetPasswordRequest,
     ResetPasswordResponse,
+    ReauthRequest,
+    ReauthResponse,
+    ReauthVerifyRequest,
 )
-from app.schemas.oauth import (
-    OAuthLoginResponse,
-    OAuthCallbackRequest,
-    OAuthCallbackResponse,
-)
+from app.api.deps import get_current_user
+from app.models.user import User
 from app.services.auth_service import AuthService
 from app.services.oauth_service import OAuthService
 from app.services.otp_service import (
@@ -224,6 +229,12 @@ async def logout(
     )
     await db.commit()
 
+    # Clear MFA/AAL2 status so they must re-verify on next login,
+    # UNLESS they checked "Remember Me" during login.
+    if not token_result.payload.remember:
+        from app.api.deps_mfa import revoke_aal2
+        revoke_aal2(token_result.payload.sub)
+
     return {"message": "Successfully logged out"}
 
 
@@ -390,3 +401,61 @@ async def github_oauth_callback_get(
         error_description=error_description,
         db=db,
     )
+
+
+# ==================== Re-authentication ====================
+
+
+@router.post("/reauthenticate", response_model=ReauthResponse)
+async def reauthenticate(
+    data: ReauthRequest,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: AsyncSession = Depends(get_db),
+    otp_service: OTPService = Depends(get_otp_service),
+):
+    """
+    Initiate re-authentication for sensitive actions.
+    If 'password' is provided, it verifies it and promotes to aal2.
+    Otherwise, it sends an OTP to the user's email.
+    """
+    from app.api.deps_mfa import promote_to_aal2
+    from app.core.security import verify_password
+
+    if data.password:
+        if not current_user.password_hash:
+            raise HTTPException(
+                status_code=400,
+                detail="This account does not have a password. Please use email OTP.",
+            )
+        if not verify_password(data.password, current_user.password_hash):
+            raise HTTPException(status_code=401, detail="Invalid password")
+
+        promote_to_aal2(current_user.id)
+        return ReauthResponse(status="verified", message="Identity confirmed.")
+
+    # No password — send OTP
+    try:
+        await otp_service.send_reauth_otp(current_user)
+        return ReauthResponse(
+            status="otp_sent", message="Verification code sent to your email."
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to send OTP: {str(e)}")
+
+
+@router.post("/verify-reauthenticate", response_model=ReauthResponse)
+async def verify_reauthenticate(
+    data: ReauthVerifyRequest,
+    current_user: Annotated[User, Depends(get_current_user)],
+    otp_service: OTPService = Depends(get_otp_service),
+):
+    """Verify a re-authentication OTP and promote to aal2."""
+    from app.api.deps_mfa import promote_to_aal2
+
+    try:
+        await otp_service.verify_reauth_otp(current_user, data.otp)
+        promote_to_aal2(current_user.id)
+        return ReauthResponse(status="verified", message="Identity confirmed.")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+

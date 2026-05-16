@@ -84,7 +84,9 @@ class AuthService:
                 "Email not verified. Please check your inbox for the verification code."
             )
 
-        return create_access_token(subject=user.id)
+        return create_access_token(
+            subject=user.id, extra_claims={"remember": data.remember_me}
+        )
 
     async def get_user_by_id(self, user_id: str) -> User | None:
         """Get user by ID, works for both regular and OAuth users."""

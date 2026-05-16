@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Literal
 import re
 
@@ -54,6 +55,8 @@ class UserResponse(BaseModel):
     is_active: bool
     is_admin: bool
     oauth_provider: str | None = None
+    mfa_enabled: bool = False
+    mfa_enrolled_at: datetime | None = None
     has_password: bool = False
     # Internal field to help populate has_password from ORM
     password_hash: str | None = Field(None, exclude=True)
@@ -72,6 +75,7 @@ class UserResponse(BaseModel):
 class UserLogin(BaseModel):
     email: EmailStr
     password: str
+    remember_me: bool = False
 
 
 class Token(BaseModel):
