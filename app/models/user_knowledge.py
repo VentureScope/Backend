@@ -37,7 +37,7 @@ class UserKnowledge(Base):
     
     # The vector representation of the content
     embedding: Mapped[list[float] | None] = mapped_column(
-        Vector(settings.EMBEDDING_DIMENSIONS), nullable=False
+        Vector(settings.EMBEDDING_DIMENSIONS), nullable=True
     )
     
     # Embedding status for background task tracking
