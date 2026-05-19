@@ -211,8 +211,11 @@ class Settings(BaseSettings):
     S3_ENDPOINT_URL: str = ""
     S3_PROFILE_PICTURE_BUCKET: str = "photo"
 
-    # Redis Configuration
-    REDIS_URL: str = ""
+    # Upstash Redis – HTTP client (used by OTP service, rate limiting)
+    UPSTASH_REDIS_URL: str = ""
+    UPSTASH_REDIS_TOKEN: str = ""
+
+    # Celery broker / result backend – wire-protocol rediss:// URL from Upstash
     CELERY_BROKER_URL: str = ""
     CELERY_RESULT_BACKEND: str = ""
 
@@ -242,6 +245,8 @@ class Settings(BaseSettings):
     DO_SPACES_REGION: str = "lon1"
     DO_SPACES_BUCKET: str = ""
     DO_SPACES_ENDPOINT: str = ""  # e.g. https://lon1.digitaloceanspaces.com
+    # Legacy: kept for backward-compat; no longer used at runtime
+    REDIS_URL: str = ""
 
     # Email / OTP Configuration
     EMAIL_PROVIDER: str = "mailgun"  # mailgun | (extendable: sendgrid, smtp, ...)

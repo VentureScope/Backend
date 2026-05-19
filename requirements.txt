@@ -13,6 +13,9 @@ pg8000>=0.28.0
 celery[redis]>=5.4.0
 redis>=5.0.0
 
+# Upstash Redis (HTTP-based async client for OTP / rate limiting)
+upstash-redis>=1.7.0
+
 # Auth
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4

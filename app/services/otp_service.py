@@ -3,7 +3,7 @@ OTP (One-Time Password) service for email verification.
 
 Responsibilities:
   - Generate a cryptographically random 6-digit OTP.
-  - Persist the OTP in Redis with a TTL (auto-expiry, no cron needed).
+  - Persist the OTP in Upstash Redis with a TTL (auto-expiry, no cron needed).
   - Enforce resend rate-limits (cooldown + hourly cap) via Redis counters.
   - Verify submitted OTP codes using constant-time comparison.
   - Render and dispatch HTML/plain-text verification emails.
@@ -12,16 +12,26 @@ Redis key layout:
   otp:{user_id}                    – the current OTP code (TTL = OTP_EXPIRE_MINUTES)
   otp_cooldown:{user_id}           – sentinel for per-resend cooldown (TTL = OTP_RESEND_COOLDOWN_SECONDS)
   otp_resend_count:{user_id}       – rolling hourly resend counter (TTL = 3600s)
+
+  pwd_reset:{user_id}              – password-reset OTP
+  pwd_reset_cooldown:{user_id}     – cooldown sentinel
+  pwd_reset_count:{user_id}        – hourly counter
+
+  reauth:{user_id}                 – re-authentication OTP
+  reauth_cooldown:{user_id}        – cooldown sentinel
+  reauth_count:{user_id}           – hourly counter
+
+Backend: Upstash Redis (HTTP-based async client via upstash-redis SDK).
+Celery broker/backend still uses the standard rediss:// wire-protocol URL
+configured via CELERY_BROKER_URL / CELERY_RESULT_BACKEND — no change there.
 """
 
 import logging
-import os
 import secrets
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
-import redis.asyncio as aioredis
+from upstash_redis.asyncio import Redis
 
 from app.core.config import settings
 from app.models.user import User
@@ -81,17 +91,13 @@ class OTPService:
     rate-limiting, and email dispatch.
 
     Args:
-        redis_client: An async Redis client instance.
+        redis_client: An async Upstash Redis client instance.
     """
 
     OTP_LENGTH = 6
 
-    def __init__(self, redis_client: aioredis.Redis) -> None:
+    def __init__(self, redis_client: Redis) -> None:
         self._redis = redis_client
-
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
 
     # ------------------------------------------------------------------
     # Key builders – email verification
@@ -153,7 +159,7 @@ class OTPService:
     # ------------------------------------------------------------------
 
     async def _store_otp(self, user_id: str, code: str) -> None:
-        """Persist OTP in Redis with TTL."""
+        """Persist OTP in Upstash Redis with TTL."""
         await self._redis.set(
             self._otp_key(user_id),
             code,
@@ -178,8 +184,8 @@ class OTPService:
         """
         Generate a fresh OTP, store it in Redis, and email it to the user.
 
-        This is called during registration (no rate-limit check) and also
-        by resend_otp() after the rate-limit guards pass.
+        Called during registration (no rate-limit check) and also by
+        resend_otp() after rate-limit guards pass.
         """
         code = self._generate_code()
         await self._store_otp(user.id, code)
@@ -227,10 +233,11 @@ class OTPService:
         )
 
         # Increment hourly counter (set TTL only on first increment)
+        # Upstash pipeline: chain commands then call exec() to dispatch the batch
         pipe = self._redis.pipeline()
         pipe.incr(count_key)
-        pipe.expire(count_key, 3600, nx=True)  # only set TTL if key is new
-        await pipe.execute()
+        pipe.expire(count_key, 3600, nx=True)
+        await pipe.exec()
 
     async def verify_otp(self, user: User, submitted_code: str) -> None:
         """
@@ -254,9 +261,8 @@ class OTPService:
                 "Please request a new one."
             )
 
-        # Decode bytes if Redis returns bytes
-        if isinstance(stored_code, bytes):
-            stored_code = stored_code.decode()
+        # Upstash SDK always returns str when decode_responses=True (default)
+        stored_code = str(stored_code)
 
         # Constant-time comparison to prevent timing attacks
         if not secrets.compare_digest(stored_code, submitted_code.strip()):
@@ -346,7 +352,7 @@ class OTPService:
         pipe = self._redis.pipeline()
         pipe.incr(count_key)
         pipe.expire(count_key, 3600, nx=True)
-        await pipe.execute()
+        await pipe.exec()
 
     async def verify_password_reset_otp(
         self, user: User, submitted_code: str
@@ -368,16 +374,15 @@ class OTPService:
                 "Please request a new one."
             )
 
-        if isinstance(stored_code, bytes):
-            stored_code = stored_code.decode()
+        stored_code = str(stored_code)
 
         if not secrets.compare_digest(stored_code, submitted_code.strip()):
             raise OTPInvalidError("Invalid reset code.")
 
-        # One-time use
-        await self._redis.delete(self._pwd_reset_key(user_id))
-        await self._redis.delete(self._pwd_reset_cooldown_key(user_id))
-        await self._redis.delete(self._pwd_reset_count_key(user_id))
+        # One-time use — fixed: use user.id not undefined user_id
+        await self._redis.delete(self._pwd_reset_key(user.id))
+        await self._redis.delete(self._pwd_reset_cooldown_key(user.id))
+        await self._redis.delete(self._pwd_reset_count_key(user.id))
 
     # ------------------------------------------------------------------
     # Core operations – re-authentication
@@ -386,8 +391,6 @@ class OTPService:
     async def _send_reauth_email(self, user: User, code: str) -> None:
         """Render re-auth templates and dispatch the email."""
         context = self._build_email_context(user, code)
-        # Reuse password reset templates if reauth ones don't exist yet,
-        # but let's assume we might want a different subject.
         html_body = _render_template("reauth_verification.html", context)
         text_body = _render_template("reauth_verification.txt", context)
 
@@ -421,8 +424,7 @@ class OTPService:
         if stored_code is None:
             raise OTPExpiredError("Re-authentication code has expired or was never issued.")
 
-        if isinstance(stored_code, bytes):
-            stored_code = stored_code.decode()
+        stored_code = str(stored_code)
 
         if not secrets.compare_digest(stored_code, submitted_code.strip()):
             raise OTPInvalidError("Invalid re-authentication code.")
@@ -437,45 +439,26 @@ class OTPService:
 # ---------------------------------------------------------------------------
 
 
-def get_redis_client() -> aioredis.Redis:
-    """Return a shared async Redis client from REDIS_URL.
-
-    Handles the ``ssl_cert_reqs=CERT_NONE`` query parameter that Render
-    Redis URLs commonly include.  redis-py >=5.x rejects this as a URL
-    query-string param, so we strip it and pass the SSL configuration
-    explicitly.
+def get_redis_client() -> Redis:
     """
-    if not settings.REDIS_URL:
-        raise ValueError("REDIS_URL must be configured for OTP storage.")
+    Return an async Upstash Redis client.
 
-    url = settings.REDIS_URL
-    parsed = urlparse(url)
-    extra_kwargs: dict = {}
-
-    # Handle SSL connections (rediss:// scheme)
-    if parsed.scheme == "rediss":
-        # Strip ssl_cert_reqs from query string if present
-        qs = parse_qs(parsed.query)
-        cert_req_value = qs.pop("ssl_cert_reqs", [None])[0]
-
-        # Rebuild the URL without ssl_cert_reqs
-        cleaned_query = urlencode(
-            {k: v[0] for k, v in qs.items()}, doseq=False
+    Uses the HTTP-based upstash-redis SDK — no TCP socket, no TLS config
+    needed. Works in any environment including serverless.
+    """
+    if not settings.UPSTASH_REDIS_URL or not settings.UPSTASH_REDIS_TOKEN:
+        raise ValueError(
+            "UPSTASH_REDIS_URL and UPSTASH_REDIS_TOKEN must be configured."
         )
-        parsed = parsed._replace(query=cleaned_query)
-        url = urlunparse(parsed)
-
-        
-        if cert_req_value and "NONE" in cert_req_value.upper():
-            extra_kwargs["ssl_cert_reqs"] = "none"
-            extra_kwargs["ssl_check_hostname"] = False
-
-    return aioredis.from_url(url, decode_responses=False, **extra_kwargs)
+    return Redis(
+        url=settings.UPSTASH_REDIS_URL,
+        token=settings.UPSTASH_REDIS_TOKEN,
+    )
 
 
 async def get_otp_service() -> OTPService:
     """
-    FastAPI dependency that yields an OTPService backed by Redis.
+    FastAPI dependency that yields an OTPService backed by Upstash Redis.
 
     Usage in endpoints:
         otp_service: OTPService = Depends(get_otp_service)

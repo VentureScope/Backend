@@ -17,9 +17,18 @@ class RoadmapRepository:
         self.db = db
 
     async def list_by_user(self, user_id: str) -> list[LearningRoadmap]:
+        """
+        List all roadmaps for a user, eagerly loading steps and their
+        progress rows so completion stats can be computed without extra
+        queries.
+        """
         result = await self.db.execute(
             select(LearningRoadmap)
             .where(LearningRoadmap.user_id == user_id)
+            .options(
+                selectinload(LearningRoadmap.steps)
+                .selectinload(LearningRoadmapStep.progress),
+            )
             .order_by(LearningRoadmap.created_at.desc())
         )
         return list(result.scalars().all())
@@ -42,6 +51,21 @@ class RoadmapRepository:
         )
         return result.scalar_one_or_none()
 
+    async def get_by_id_any_user(self, roadmap_id: str) -> LearningRoadmap | None:
+        """
+        Fetch a roadmap by ID without user ownership check.
+        Used internally by update_step_progress to reload roadmap stats.
+        """
+        result = await self.db.execute(
+            select(LearningRoadmap)
+            .where(LearningRoadmap.id == roadmap_id)
+            .options(
+                selectinload(LearningRoadmap.steps)
+                .selectinload(LearningRoadmapStep.progress),
+            )
+        )
+        return result.scalar_one_or_none()
+
     async def create_roadmap(self, data: dict) -> LearningRoadmap:
         roadmap = LearningRoadmap(
             id=str(uuid.uuid4()),
@@ -50,7 +74,7 @@ class RoadmapRepository:
             trend_name=data.get("trend_name"),
             goal=data.get("goal"),
             total_weeks=data["total_weeks"],
-            status=data.get("status", "completed"),
+            status=data.get("status", "not_started"),
         )
         self.db.add(roadmap)
         await self.db.flush()
@@ -111,6 +135,20 @@ class RoadmapRepository:
         progress.status = status
         if status == "completed":
             progress.completed_at = datetime.now(timezone.utc)
+        else:
+            # Clear completed_at if reverting from completed
+            progress.completed_at = None
         if notes is not None:
             progress.notes = notes
         return progress
+
+    async def update_roadmap_status(
+        self, roadmap_id: str, status: str
+    ) -> None:
+        """Update the overall status of a roadmap."""
+        result = await self.db.execute(
+            select(LearningRoadmap).where(LearningRoadmap.id == roadmap_id)
+        )
+        roadmap = result.scalar_one_or_none()
+        if roadmap:
+            roadmap.status = status
