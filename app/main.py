@@ -135,6 +135,7 @@ def root() -> dict:
     return {"message": "VentureScope API", "docs": "/docs"}
 
 
+
 app.include_router(health.router, prefix="/api", tags=["health"])
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(mfa.router, prefix="/api/auth/mfa", tags=["mfa"])

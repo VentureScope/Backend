@@ -21,6 +21,7 @@ wheels/
 *.egg
 MANIFEST
 
+local_ignore/
 # Virtual environments
 venv/
 env/
