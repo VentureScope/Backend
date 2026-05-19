@@ -34,14 +34,29 @@ class UserService:
     async def _queue_user_embedding(self, user: User) -> None:
         """Queue embedding generation in background."""
         user.embedding_status = "pending"
-        # Pass social_links and experiences for embedding
         social_links = user.social_links
+
         # Get experiences for this user
         from app.services.experience_service import ExperienceService
         exp_service = ExperienceService(self.db)
         experiences = await exp_service.get_all_for_user(user.id)
+
+        # Serialize ORM objects to plain dicts — Celery/Kombu cannot
+        # JSON-serialize SQLAlchemy model instances directly
+        experiences_data = [
+            {
+                "job_title": e.job_title,
+                "company": e.company,
+                "start_date": str(e.start_date.date()) if e.start_date else None,
+                "end_date": str(e.end_date.date()) if e.end_date else None,
+                "description": e.description,
+                "skills_used": e.skills_used,
+            }
+            for e in experiences
+        ]
+
         generate_user_profile_embedding.delay(
-            user.id, social_links=social_links, experiences=experiences
+            user.id, social_links=social_links, experiences=experiences_data
         )
 
     # ==================== Self-Service Operations ====================
