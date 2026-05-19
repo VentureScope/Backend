@@ -55,6 +55,8 @@ class ResumeOut(BaseModel):
     certifications: list[CertificationSection] = []
     trending_skills_highlighted: list[str] = []
     created_at: datetime
+    # Informational messages for missing profile sections (not an error)
+    warnings: list[str] = []
 
 
 class ResumeGenerateRequest(BaseModel):

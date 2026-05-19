@@ -120,16 +120,79 @@ class RoadmapService:
     async def update_step_progress(
         self, user_id: str, step_id: str, status: str, notes: str | None = None
     ) -> dict:
+        from fastapi import HTTPException
+
+        # Validate status value
+        valid_statuses = {"not_started", "in_progress", "completed"}
+        if status not in valid_statuses:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid status '{status}'. Must be one of: {', '.join(sorted(valid_statuses))}",
+            )
+
         progress = await self.repo.get_progress(user_id, step_id)
         if not progress:
-            from fastapi import HTTPException
             raise HTTPException(status_code=404, detail="Progress not found")
 
         await self.repo.update_progress(progress, status, notes)
+
+        # --- Auto-update roadmap status ---
+        # Find the roadmap this step belongs to
+        from app.models.roadmap import LearningRoadmapStep
+        from sqlalchemy import select
+        step_result = await self.db.execute(
+            select(LearningRoadmapStep).where(LearningRoadmapStep.id == step_id)
+        )
+        step = step_result.scalar_one_or_none()
+
+        roadmap_status = "not_started"
+        steps_completed = 0
+        total_steps = 0
+
+        if step:
+            roadmap = await self.repo.get_by_id_any_user(step.roadmap_id)
+            if roadmap:
+                total_steps = len(roadmap.steps)
+                progress_statuses = []
+                for s in roadmap.steps:
+                    for p in s.progress:
+                        if p.user_id == user_id:
+                            # Use the freshly updated value for the current step
+                            if s.id == step_id:
+                                progress_statuses.append(status)
+                            else:
+                                progress_statuses.append(p.status)
+                            break
+                    else:
+                        progress_statuses.append("not_started")
+
+                steps_completed = progress_statuses.count("completed")
+
+                # Determine new roadmap status
+                if total_steps > 0 and steps_completed == total_steps:
+                    roadmap_status = "completed"
+                elif any(s in ("in_progress", "completed") for s in progress_statuses):
+                    roadmap_status = "in_progress"
+                else:
+                    roadmap_status = "not_started"
+
+                await self.repo.update_roadmap_status(step.roadmap_id, roadmap_status)
+
         await self.db.commit()
+
+        completion_percentage = (
+            round(steps_completed / total_steps * 100, 1) if total_steps else 0.0
+        )
+
         return {
+            "step_id": step_id,
             "status": progress.status,
             "completed_at": progress.completed_at,
+            "notes": progress.notes,
+            "roadmap_status": roadmap_status,
+            "steps_completed": steps_completed,
+            "total_steps": total_steps,
+            "completion_percentage": completion_percentage,
         }
 
     async def _call_llm(

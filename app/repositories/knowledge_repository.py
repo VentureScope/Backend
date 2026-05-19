@@ -48,3 +48,52 @@ class KnowledgeRepository:
         )
         result = await self.db.execute(query)
         return list(result.scalars().all())
+
+    async def search_by_sources(
+        self,
+        user_id: str,
+        query_embedding: list[float],
+        source_types: list[str],
+        limit: int = 8,
+    ) -> list[UserKnowledge]:
+        """
+        Vector similarity search restricted to specific source_types for a user.
+
+        Only chunks that have been embedded (embedding_status='completed') are
+        considered; pending/failed chunks are skipped so we never get None
+        embeddings in the cosine distance call.
+        """
+        query = (
+            select(UserKnowledge)
+            .where(
+                UserKnowledge.user_id == user_id,
+                UserKnowledge.source_type.in_(source_types),
+                UserKnowledge.embedding_status == "completed",
+                UserKnowledge.embedding.is_not(None),
+            )
+            .order_by(UserKnowledge.embedding.cosine_distance(query_embedding))
+            .limit(limit)
+        )
+        result = await self.db.execute(query)
+        return list(result.scalars().all())
+
+    async def get_all_by_user_and_sources(
+        self,
+        user_id: str,
+        source_types: list[str],
+    ) -> list[UserKnowledge]:
+        """
+        Return ALL knowledge chunks for a user filtered by source_types.
+        No vector search — plain DB fetch ordered by creation time.
+        Useful for checking whether a source type has any data at all.
+        """
+        query = (
+            select(UserKnowledge)
+            .where(
+                UserKnowledge.user_id == user_id,
+                UserKnowledge.source_type.in_(source_types),
+            )
+            .order_by(UserKnowledge.created_at.asc())
+        )
+        result = await self.db.execute(query)
+        return list(result.scalars().all())

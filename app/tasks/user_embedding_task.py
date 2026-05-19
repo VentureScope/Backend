@@ -14,10 +14,39 @@ logger = logging.getLogger(__name__)
 
 
 def get_sync_engine():
-    """Create sync engine for Celery tasks."""
+    """
+    Create a sync pg8000 engine for Celery tasks.
+
+    pg8000 does not accept 'ssl' or 'sslmode' as URL query parameters —
+    SSL must be passed via connect_args instead. We strip those params from
+    the URL and pass ssl_context explicitly when the original URL required SSL.
+    """
     from sqlalchemy.pool import NullPool
-    url = settings.DATABASE_URL.replace('postgresql+asyncpg://', 'postgresql+pg8000://')
-    return create_engine(url, poolclass=NullPool)
+    from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+    import ssl
+
+    raw = settings.DATABASE_URL.replace('postgresql+asyncpg://', 'postgresql+pg8000://')
+
+    parsed = urlparse(raw)
+    qs = parse_qs(parsed.query)
+
+    # Detect SSL requirement from query params
+    ssl_param = qs.pop('ssl', [''])[0].lower()
+    sslmode_param = qs.pop('sslmode', [''])[0].lower()
+    needs_ssl = ssl_param in ('true', 'require') or sslmode_param in ('require', 'verify-ca', 'verify-full')
+
+    # Rebuild URL without ssl/sslmode params
+    cleaned_query = urlencode({k: v[0] for k, v in qs.items()})
+    cleaned_url = urlunparse(parsed._replace(query=cleaned_query))
+
+    connect_args = {}
+    if needs_ssl:
+        ssl_ctx = ssl.create_default_context()
+        ssl_ctx.check_hostname = False
+        ssl_ctx.verify_mode = ssl.CERT_NONE
+        connect_args['ssl_context'] = ssl_ctx
+
+    return create_engine(cleaned_url, poolclass=NullPool, connect_args=connect_args)
 
 
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=60)

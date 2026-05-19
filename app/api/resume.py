@@ -17,13 +17,27 @@ async def create_resume(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    """
+    Generate and persist a resume for the authenticated user.
+
+    Returns the resume along with a `warnings` list that describes any profile
+    sections that were empty (e.g. no transcript uploaded, no CV, no skills).
+    The resume is still created even when some sections are missing — the
+    warnings are informational, not errors.
+
+    Raises 422 for user-facing issues (e.g. unparseable LLM output).
+    Raises 500 for unexpected server errors.
+    """
     try:
         service = ResumeService(db, current_user.id)
         return await service.generate_and_save(target_role=req.target_role)
+    except ValueError as e:
+        # User-facing issues: missing data, bad LLM output, etc.
+        raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to generate resume: {str(e)}",
+            detail=f"An unexpected error occurred while generating the resume. Please try again.",
         )
 
 
