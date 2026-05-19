@@ -7,6 +7,8 @@ from app.models.chat import ChatSession, ChatMessage
 from app.models.notification import Notification
 from app.models.user_knowledge import UserKnowledge
 from app.models.github_sync_snapshot import GitHubSyncSnapshot
+from app.models.admin_notification import AdminNotification
+from app.models.taxonomy_role import TaxonomyRole
 
 __all__ = [
     "User",
@@ -19,6 +21,8 @@ __all__ = [
     "Notification",
     "UserKnowledge",
     "GitHubSyncSnapshot",
+    "AdminNotification",
+    "TaxonomyRole",
 ]
 
 
