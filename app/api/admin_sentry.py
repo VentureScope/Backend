@@ -48,7 +48,12 @@ def _verify_sentry_hmac(body: bytes, sentry_hook_signature: str | None) -> None:
     """
     secret = settings.SENTRY_WEBHOOK_SECRET
     if not secret:
-        logger.warning("SENTRY_WEBHOOK_SECRET not set — skipping webhook HMAC verification")
+        if settings.ENVIRONMENT == "production":
+            raise HTTPException(
+                status_code=500,
+                detail="SENTRY_WEBHOOK_SECRET is not configured on this server",
+            )
+        logger.warning("SENTRY_WEBHOOK_SECRET not set — skipping webhook HMAC verification (dev only)")
         return
 
     if not sentry_hook_signature:
@@ -135,9 +140,9 @@ async def receive_sentry_webhook(
     action: str = payload.get("action", "triggered")
     issue: dict = payload.get("data", {}).get("issue", {})
 
-    event_type = f"sentry_{action}"
-    title = issue.get("title", "Sentry alert")
-    culprit = issue.get("culprit", "")
+    event_type = f"sentry_{action}"[:100]
+    title = str(issue.get("title", "Sentry alert"))[:255]
+    culprit = str(issue.get("culprit", ""))[:500]
     level = issue.get("level", "error")
     times_seen = issue.get("count", 0)
     last_seen = issue.get("lastSeen", "")

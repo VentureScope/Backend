@@ -1,14 +1,16 @@
 """
-SupabaseService — thin async wrapper for read-only queries against
-the Supabase PostgreSQL database (CareerCompass data).
+SupabaseService — async wrapper for Supabase PostgreSQL queries (CareerCompass data).
+
+Performs both reads (ML runs, taxonomy, overview stats) and writes
+(status updates on ml_training_runs and unmatched_roles).
 
 Uses asyncpg directly (no ORM) so it can share the same asyncio loop
 as the rest of FastAPI without a second SQLAlchemy engine.
 
-Connection is opened lazily and re-used for the lifetime of the
+Connection pool is opened lazily and re-used for the lifetime of the
 process. Configure via SUPABASE_URL env var:
 
-  SUPABASE_URL=postgresql://grafana_ro:<password>@db.<project>.supabase.co:5432/postgres?sslmode=require
+  SUPABASE_URL=postgresql://<user>:<password>@<host>:5432/postgres
 """
 
 import asyncio

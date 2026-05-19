@@ -8,6 +8,7 @@ admin credentials to the general backend.
 All methods are async (httpx AsyncClient).
 """
 
+import asyncio
 import logging
 from typing import Any
 
@@ -92,9 +93,12 @@ class AirflowService:
         """
         Return the last run state for both the ETL and training DAGs.
         Used by GET /api/admin/system/pipeline-status.
+        Both DAGs are fetched concurrently.
         """
-        etl = await self.get_last_dag_run(ETL_DAG_ID)
-        training = await self.get_last_dag_run(TRAINING_DAG_ID)
+        etl, training = await asyncio.gather(
+            self.get_last_dag_run(ETL_DAG_ID),
+            self.get_last_dag_run(TRAINING_DAG_ID),
+        )
         return {
             "etl": etl,
             "training": training,

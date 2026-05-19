@@ -8,17 +8,18 @@ Routes (all under /api/admin, mounted in main.py):
   GET /system/storage            DO Spaces model file listing + total size
 """
 
+import asyncio
 import logging
 from typing import Annotated, Any
 
-import boto3
 from botocore.exceptions import ClientError
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.deps import get_current_admin_user
 from app.core.config import settings
 from app.models.user import User
 from app.services.airflow_service import AirflowServiceError, get_airflow_service
+from app.services.spaces_service import get_spaces_client
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +62,7 @@ async def get_pipeline_status(
 @router.get("/system/pipeline-runs")
 async def get_pipeline_runs(
     current_admin: Annotated[User, Depends(get_current_admin_user)],
-    days: int = 7,
+    days: int = Query(7, ge=1, le=90, description="Number of days of history (1–90)"),
 ) -> dict[str, Any]:
     """
     Return ETL dag_run history for the last N days plus task durations
@@ -84,16 +85,6 @@ async def get_pipeline_runs(
 # ---------------------------------------------------------------------------
 
 
-def _get_spaces_client():
-    return boto3.client(
-        "s3",
-        region_name=settings.DO_SPACES_REGION,
-        endpoint_url=settings.DO_SPACES_ENDPOINT,
-        aws_access_key_id=settings.DO_SPACES_KEY,
-        aws_secret_access_key=settings.DO_SPACES_SECRET,
-    )
-
-
 @router.get("/system/storage")
 async def get_storage_health(
     current_admin: Annotated[User, Depends(get_current_admin_user)],
@@ -113,7 +104,7 @@ async def get_storage_health(
             detail="DO Spaces is not configured (DO_SPACES_BUCKET / DO_SPACES_ENDPOINT missing)",
         )
 
-    client = _get_spaces_client()
+    client = get_spaces_client()
     bucket = settings.DO_SPACES_BUCKET
 
     def _list_prefix(prefix: str) -> list[dict[str, Any]]:
@@ -135,8 +126,10 @@ async def get_storage_health(
             logger.error("DO Spaces list error (prefix=%s): %s", prefix, exc)
             return []
 
-    staging_files = _list_prefix("models/staging/")
-    production_files = _list_prefix("models/production/")
+    staging_files, production_files = await asyncio.gather(
+        asyncio.to_thread(_list_prefix, "models/staging/"),
+        asyncio.to_thread(_list_prefix, "models/production/"),
+    )
 
     all_files = staging_files + production_files
     total_bytes = sum(f["size_bytes"] for f in all_files)

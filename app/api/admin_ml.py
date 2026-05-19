@@ -10,6 +10,7 @@ Routes (all under /api/admin, mounted in main.py):
   POST /notifications             Receive HMAC-signed pipeline webhook from CareerCompass
 """
 
+import asyncio
 import hashlib
 import hmac
 import logging
@@ -17,9 +18,9 @@ import uuid
 from datetime import datetime, timezone
 from typing import Annotated, Any
 
-import boto3
 from botocore.exceptions import ClientError
-from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
+from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_admin_user
@@ -28,6 +29,7 @@ from app.core.database import get_db
 from app.models.admin_notification import AdminNotification
 from app.models.user import User
 from app.services.airflow_service import AirflowServiceError, get_airflow_service
+from app.services.spaces_service import get_spaces_client
 from app.services.supabase_service import SupabaseService, get_supabase_service
 
 logger = logging.getLogger(__name__)
@@ -44,8 +46,12 @@ def _verify_pipeline_hmac(body: bytes, signature_header: str | None) -> None:
     """Raise 401 if the X-Pipeline-Signature HMAC-SHA256 doesn't match."""
     secret = settings.PIPELINE_WEBHOOK_SECRET
     if not secret:
-        # If no secret is configured, skip verification (dev mode)
-        logger.warning("PIPELINE_WEBHOOK_SECRET not set — skipping HMAC verification")
+        if settings.ENVIRONMENT == "production":
+            raise HTTPException(
+                status_code=500,
+                detail="PIPELINE_WEBHOOK_SECRET is not configured on this server",
+            )
+        logger.warning("PIPELINE_WEBHOOK_SECRET not set — skipping HMAC verification (dev only)")
         return
 
     if not signature_header:
@@ -58,30 +64,13 @@ def _verify_pipeline_hmac(body: bytes, signature_header: str | None) -> None:
         raise HTTPException(status_code=401, detail="Invalid pipeline webhook signature")
 
 
-def _get_spaces_client():
-    """Return a boto3 S3 client pointed at DO Spaces."""
-    return boto3.client(
-        "s3",
-        region_name=settings.DO_SPACES_REGION,
-        endpoint_url=settings.DO_SPACES_ENDPOINT,
-        aws_access_key_id=settings.DO_SPACES_KEY,
-        aws_secret_access_key=settings.DO_SPACES_SECRET,
-    )
-
-
-def _push_model_to_production(staging_key: str) -> str:
+def _push_model_to_production_sync(staging_key: str) -> str:
     """
     Copy a model file from models/staging/ → models/production/ in DO Spaces.
-    Returns the production key.
+    Returns the production key. Runs synchronously — call via asyncio.to_thread().
     """
-    if not staging_key or not settings.DO_SPACES_BUCKET:
-        raise HTTPException(
-            status_code=503,
-            detail="DO Spaces is not configured or staging_pkl_key is missing.",
-        )
-
     production_key = staging_key.replace("models/staging/", "models/production/", 1)
-    client = _get_spaces_client()
+    client = get_spaces_client()
     try:
         client.copy_object(
             Bucket=settings.DO_SPACES_BUCKET,
@@ -90,10 +79,7 @@ def _push_model_to_production(staging_key: str) -> str:
         )
     except ClientError as exc:
         logger.error("DO Spaces copy failed: %s", exc)
-        raise HTTPException(
-            status_code=502,
-            detail=f"Failed to copy model to production in DO Spaces: {exc}",
-        )
+        raise RuntimeError(f"Failed to copy model to production in DO Spaces: {exc.response['Error']['Code']}")
     return production_key
 
 
@@ -170,7 +156,7 @@ async def deploy_ml_run(
     if not run:
         raise HTTPException(status_code=404, detail="Training run not found")
 
-    if run.get("status") not in ("awaiting_review", "training"):
+    if run.get("status") != "awaiting_review":
         raise HTTPException(
             status_code=400,
             detail=f"Run is in status '{run['status']}' — only awaiting_review runs can be deployed.",
@@ -178,8 +164,17 @@ async def deploy_ml_run(
 
     # Push model file to production in DO Spaces
     staging_key = run.get("staging_pkl_key", "")
-    if staging_key:
-        _push_model_to_production(staging_key)
+    if not staging_key:
+        raise HTTPException(
+            status_code=400,
+            detail="This training run has no staging artifact (staging_pkl_key is empty) — cannot deploy.",
+        )
+    if not settings.DO_SPACES_BUCKET or not settings.DO_SPACES_ENDPOINT:
+        raise HTTPException(status_code=503, detail="DO Spaces is not configured on this server.")
+    try:
+        await asyncio.to_thread(_push_model_to_production_sync, staging_key)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
 
     now_iso = datetime.now(timezone.utc).isoformat()
     admin_email = current_admin.email
@@ -271,9 +266,9 @@ async def receive_pipeline_notification(
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON body")
 
-    event_type = payload.get("event_type", "pipeline_event")
-    title = payload.get("title", "Pipeline notification")
-    body_text = payload.get("body", "")
+    event_type = str(payload.get("event_type", "pipeline_event"))[:100]
+    title = str(payload.get("title", "Pipeline notification"))[:255]
+    body_text = str(payload.get("body", ""))[:10_000]
     metadata = payload.get("metadata")
 
     notification = AdminNotification(
@@ -291,3 +286,101 @@ async def receive_pipeline_notification(
 
     logger.info("Pipeline notification stored: event_type=%s", event_type)
     return {"id": notification.id, "status": "stored"}
+
+
+# ---------------------------------------------------------------------------
+# Notification feed (read + mark-as-read)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/notifications-feed")
+async def list_admin_notifications(
+    current_admin: Annotated[User, Depends(get_current_admin_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    source: str | None = Query(None, description="Filter by source: pipeline | sentry"),
+    unread_only: bool = Query(False, description="Return only unread notifications"),
+    page: int = Query(1, ge=1),
+    per_page: int = Query(50, ge=1, le=200),
+) -> dict[str, Any]:
+    """
+    List stored admin notifications (pipeline alerts + Sentry webhooks),
+    newest first. Supports filtering by source and read status.
+    """
+    from sqlalchemy import func, select
+
+    stmt = select(AdminNotification)
+    if source:
+        stmt = stmt.where(AdminNotification.source == source)
+    if unread_only:
+        stmt = stmt.where(AdminNotification.is_read.is_(False))
+
+    count_stmt = select(func.count()).select_from(stmt.subquery())
+    total = (await db.execute(count_stmt)).scalar_one()
+
+    offset = (page - 1) * per_page
+    rows = (
+        await db.execute(
+            stmt.order_by(desc(AdminNotification.created_at)).offset(offset).limit(per_page)
+        )
+    ).scalars().all()
+
+    return {
+        "items": [
+            {
+                "id": n.id,
+                "source": n.source,
+                "event_type": n.event_type,
+                "title": n.title,
+                "body": n.body,
+                "is_read": n.is_read,
+                "metadata": n.metadata_,
+                "created_at": n.created_at.isoformat() if n.created_at else None,
+            }
+            for n in rows
+        ],
+        "total": total,
+        "page": page,
+        "per_page": per_page,
+        "unread_count": sum(1 for n in rows if not n.is_read),
+    }
+
+
+@router.patch("/notifications-feed/{notification_id}/read", status_code=200)
+async def mark_notification_read(
+    notification_id: str,
+    current_admin: Annotated[User, Depends(get_current_admin_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict[str, Any]:
+    """Mark a single notification as read."""
+    result = await db.execute(
+        select(AdminNotification).where(AdminNotification.id == notification_id)
+    )
+    notification = result.scalar_one_or_none()
+    if not notification:
+        raise HTTPException(status_code=404, detail="Notification not found")
+
+    notification.is_read = True
+    await db.commit()
+    return {"id": notification_id, "is_read": True}
+
+
+@router.patch("/notifications-feed/mark-all-read", status_code=200)
+async def mark_all_notifications_read(
+    current_admin: Annotated[User, Depends(get_current_admin_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    source: str | None = Query(None, description="Only mark this source as read: pipeline | sentry"),
+) -> dict[str, Any]:
+    """Mark all (or all from a given source) notifications as read."""
+    from sqlalchemy import update
+
+    stmt = (
+        update(AdminNotification)
+        .where(AdminNotification.is_read.is_(False))
+        .values(is_read=True)
+    )
+    if source:
+        stmt = stmt.where(AdminNotification.source == source)
+
+    result = await db.execute(stmt)
+    await db.commit()
+    return {"marked_read": result.rowcount}

@@ -10,7 +10,6 @@ Routes (all under /api/admin, mounted in main.py):
 
 import logging
 import uuid
-from datetime import datetime, timezone
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -145,7 +144,6 @@ async def patch_unmatched_role(
         "status": data.status,
         "cleaned_title": role.get("cleaned_title"),
         "accepted_by": current_admin.email if data.status == "accepted" else None,
-        "updated_at": datetime.now(timezone.utc).isoformat(),
     }
 
 

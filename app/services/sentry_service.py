@@ -9,6 +9,7 @@ A 5-minute in-process cache avoids hammering the Sentry API on every
 admin page load.
 """
 
+import asyncio
 import logging
 import time
 from typing import Any
@@ -110,122 +111,125 @@ class SentryService:
 
     async def _fetch_summary(self) -> dict[str, Any]:
         async with self._client() as client:
-            # Unresolved issues (last 24 h)
-            issues_resp = await client.get(
-                f"/organizations/{self._org}/issues/",
-                params={
-                    "project": self._project,
-                    "query": "is:unresolved",
-                    "statsPeriod": "24h",
-                    "limit": 5,
-                    "sort": "freq",
-                },
-            )
-            if issues_resp.status_code != 200:
-                raise SentryServiceError(
-                    f"Sentry issues API error: {issues_resp.status_code}",
-                )
-            issues_data = issues_resp.json()
-
-            top_issues = [
-                {
-                    "id": i["id"],
-                    "title": i.get("title", ""),
-                    "culprit": i.get("culprit", ""),
-                    "times_seen": i.get("count", 0),
-                    "last_seen": i.get("lastSeen", ""),
-                    "permalink": i.get("permalink", ""),
-                    "level": i.get("level", "error"),
-                    "server_name": (i.get("tags") or {}).get("server_name", ""),
-                }
-                for i in issues_data
-            ]
-            unresolved_24h = sum(int(i.get("count", 0)) for i in issues_data)
-
-            # 7-day error sparkline via stats_v2
-            stats_resp = await client.get(
-                f"/organizations/{self._org}/stats_v2/",
-                params={
-                    "project": self._project,
-                    "field": "count()",
-                    "interval": "1d",
-                    "statsPeriod": "7d",
-                    "category": "error",
-                    "outcome": "accepted",
-                },
-            )
-            sparkline: list[dict] = []
-            if stats_resp.status_code == 200:
-                stats_data = stats_resp.json()
-                intervals = stats_data.get("intervals", [])
-                groups = stats_data.get("groups", [])
-                if groups:
-                    totals = groups[0].get("totals", {}).get("count()", [])
-                    sparkline = [
-                        {"date": intervals[i], "count": totals[i]}
-                        for i in range(min(len(intervals), len(totals)))
-                    ]
-
-            # Performance — p95 latency and apdex for backend transactions
-            perf_resp = await client.get(
-                f"/organizations/{self._org}/events/",
-                params={
-                    "project": self._project,
-                    "field": ["p95(transaction.duration)", "apdex()"],
-                    "query": "event.type:transaction server_name:backend-api",
-                    "statsPeriod": "24h",
-                    "per_page": 1,
-                },
-            )
-            p95_latency_ms: float | None = None
-            apdex: float | None = None
-            if perf_resp.status_code == 200:
-                perf_data = perf_resp.json()
-                perf_rows = perf_data.get("data", [])
-                if perf_rows:
-                    row = perf_rows[0]
-                    p95_latency_ms = row.get("p95(transaction.duration)")
-                    apdex = row.get("apdex()")
-
-            # Trend delta (prior 24 h)
-            prior_resp = await client.get(
-                f"/organizations/{self._org}/stats_v2/",
-                params={
-                    "project": self._project,
-                    "field": "count()",
-                    "interval": "24h",
-                    "statsPeriod": "48h",
-                    "category": "error",
-                    "outcome": "accepted",
-                },
-            )
-            trend_delta: int | None = None
-            if prior_resp.status_code == 200:
-                prior_data = prior_resp.json()
-                prior_groups = prior_data.get("groups", [])
-                if prior_groups:
-                    prior_totals = prior_groups[0].get("totals", {}).get("count()", [])
-                    if len(prior_totals) >= 2:
-                        trend_delta = int(prior_totals[-1]) - int(prior_totals[-2])
-
-            return {
-                "unresolved_24h": unresolved_24h,
-                "trend_delta": trend_delta,
-                "top_issues": top_issues,
-                "p95_latency_ms": p95_latency_ms,
-                "apdex": apdex,
-                "seven_day_sparkline": sparkline,
-                "sentry_issues_url": (
-                    f"https://sentry.io/organizations/{self._org}/issues/"
-                    f"?project={self._project}"
+            # Fire all 4 Sentry API calls concurrently
+            issues_resp, stats_resp, perf_resp, prior_resp = await asyncio.gather(
+                client.get(
+                    f"/organizations/{self._org}/issues/",
+                    params={
+                        "project": self._project,
+                        "query": "is:unresolved",
+                        "statsPeriod": "24h",
+                        "limit": 5,
+                        "sort": "freq",
+                    },
                 ),
-                "sentry_performance_url": (
-                    f"https://sentry.io/organizations/{self._org}/performance/"
+                client.get(
+                    f"/organizations/{self._org}/stats_v2/",
+                    params={
+                        "project": self._project,
+                        "field": "count()",
+                        "interval": "1d",
+                        "statsPeriod": "7d",
+                        "category": "error",
+                        "outcome": "accepted",
+                    },
                 ),
-                "sentry_alerts_url": (
-                    f"https://sentry.io/organizations/{self._org}/alerts/"
+                client.get(
+                    f"/organizations/{self._org}/events/",
+                    params={
+                        "project": self._project,
+                        "field": ["p95(transaction.duration)", "apdex()"],
+                        "query": "event.type:transaction server_name:backend-api",
+                        "statsPeriod": "24h",
+                        "per_page": 1,
+                    },
                 ),
+                client.get(
+                    f"/organizations/{self._org}/stats_v2/",
+                    params={
+                        "project": self._project,
+                        "field": "count()",
+                        "interval": "24h",
+                        "statsPeriod": "48h",
+                        "category": "error",
+                        "outcome": "accepted",
+                    },
+                ),
+            )
+
+        # --- Parse issues ---
+        if issues_resp.status_code != 200:
+            raise SentryServiceError(
+                f"Sentry issues API error: {issues_resp.status_code}",
+            )
+        issues_data = issues_resp.json()
+        top_issues = [
+            {
+                "id": i["id"],
+                "title": i.get("title", ""),
+                "culprit": i.get("culprit", ""),
+                "times_seen": i.get("count", 0),
+                "last_seen": i.get("lastSeen", ""),
+                "permalink": i.get("permalink", ""),
+                "level": i.get("level", "error"),
+                "server_name": (i.get("tags") or {}).get("server_name", ""),
             }
+            for i in issues_data
+        ]
+        unresolved_24h = sum(int(i.get("count", 0)) for i in issues_data)
+
+        # --- Parse 7-day sparkline ---
+        sparkline: list[dict] = []
+        if stats_resp.status_code == 200:
+            stats_data = stats_resp.json()
+            intervals = stats_data.get("intervals", [])
+            groups = stats_data.get("groups", [])
+            if groups:
+                totals = groups[0].get("totals", {}).get("count()", [])
+                sparkline = [
+                    {"date": intervals[i], "count": totals[i]}
+                    for i in range(min(len(intervals), len(totals)))
+                ]
+
+        # --- Parse performance ---
+        p95_latency_ms: float | None = None
+        apdex: float | None = None
+        if perf_resp.status_code == 200:
+            perf_data = perf_resp.json()
+            perf_rows = perf_data.get("data", [])
+            if perf_rows:
+                row = perf_rows[0]
+                p95_latency_ms = row.get("p95(transaction.duration)")
+                apdex = row.get("apdex()")
+
+        # --- Parse trend delta ---
+        trend_delta: int | None = None
+        if prior_resp.status_code == 200:
+            prior_data = prior_resp.json()
+            prior_groups = prior_data.get("groups", [])
+            if prior_groups:
+                prior_totals = prior_groups[0].get("totals", {}).get("count()", [])
+                if len(prior_totals) >= 2:
+                    trend_delta = int(prior_totals[-1]) - int(prior_totals[-2])
+
+        return {
+            "unresolved_24h": unresolved_24h,
+            "trend_delta": trend_delta,
+            "top_issues": top_issues,
+            "p95_latency_ms": p95_latency_ms,
+            "apdex": apdex,
+            "seven_day_sparkline": sparkline,
+            "sentry_issues_url": (
+                f"https://sentry.io/organizations/{self._org}/issues/"
+                f"?project={self._project}"
+            ),
+            "sentry_performance_url": (
+                f"https://sentry.io/organizations/{self._org}/performance/"
+            ),
+            "sentry_alerts_url": (
+                f"https://sentry.io/organizations/{self._org}/alerts/"
+            ),
+        }
 
     def invalidate_cache(self) -> None:
         _cache.invalidate("summary")

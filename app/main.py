@@ -21,6 +21,7 @@ from app.api import (
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal
 from app.repositories.token_repository import TokenRepository
+from app.services.supabase_service import close_pool as close_supabase_pool
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +83,9 @@ async def lifespan(app: FastAPI):
         except asyncio.CancelledError:
             pass
         logger.info("Stopped token blocklist cleanup background task")
+
+    await close_supabase_pool()
+    logger.info("Closed Supabase connection pool")
 
 
 app = FastAPI(
