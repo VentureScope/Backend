@@ -29,6 +29,10 @@ env.bak/
 venv.bak/
 .venv/
 
+
+
+local_ignore/
+
 # Environment variables
 .env
 .env.local
