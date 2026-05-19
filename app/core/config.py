@@ -210,6 +210,33 @@ class Settings(BaseSettings):
     CELERY_BROKER_URL: str = ""
     CELERY_RESULT_BACKEND: str = ""
 
+    # Supabase direct read connection (for admin dashboard queries)
+    SUPABASE_URL: str = ""  # psycopg2-compatible DSN for Supabase PostgreSQL
+
+    # Airflow REST API (for admin pipeline proxy)
+    AIRFLOW_API_URL: str = ""                    # e.g. http://airflow-webserver:8080/api/v1
+    AIRFLOW_SERVICE_ACCOUNT_USER: str = ""
+    AIRFLOW_SERVICE_ACCOUNT_PASSWORD: str = ""
+
+    # Sentry
+    SENTRY_DSN: str = ""
+    SENTRY_ENVIRONMENT: str = "production"
+    SENTRY_TRACES_SAMPLE_RATE: float = 0.2
+    SENTRY_AUTH_TOKEN: str = ""      # Internal integration token — project:read + org:read
+    SENTRY_ORG_SLUG: str = ""        # e.g. venturescope
+    SENTRY_PROJECT_SLUG: str = ""    # e.g. venturescope
+    SENTRY_WEBHOOK_SECRET: str = ""  # Shared secret for verifying inbound Sentry webhooks
+
+    # Pipeline webhook secret (CareerCompass → Backend HMAC-SHA256)
+    PIPELINE_WEBHOOK_SECRET: str = ""
+
+    # DO Spaces (S3-compatible) — scoped to models/ prefix for ML model deploy
+    DO_SPACES_KEY: str = ""
+    DO_SPACES_SECRET: str = ""
+    DO_SPACES_REGION: str = "lon1"
+    DO_SPACES_BUCKET: str = ""
+    DO_SPACES_ENDPOINT: str = ""  # e.g. https://lon1.digitaloceanspaces.com
+
     # Email / OTP Configuration
     EMAIL_PROVIDER: str = "mailgun"  # mailgun | (extendable: sendgrid, smtp, ...)
     MAILGUN_API_KEY: str = ""

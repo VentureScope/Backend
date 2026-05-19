@@ -50,3 +50,6 @@ langgraph
 # CV/Resume parsing
 pypdf>=5.1.0
 python-docx>=1.1.0
+
+# Sentry — error tracking & performance monitoring
+sentry-sdk[fastapi]>=2.0.0
