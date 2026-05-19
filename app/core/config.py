@@ -3,11 +3,17 @@ Application configuration via environment variables.
 """
 
 import json
+import logging
 import os
 from typing import Any, List, Union
 from pydantic_settings import BaseSettings
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from functools import lru_cache
+
+_config_logger = logging.getLogger(__name__)
+
+_INSECURE_SECRET_KEY = "change-me-in-production-use-openssl-rand-hex-32"
+_DEFAULT_DATABASE_URL = "postgresql+asyncpg://venturescope:venturescope@localhost:5432/venturescope"
 
 
 def load_env_file():
@@ -250,6 +256,39 @@ class Settings(BaseSettings):
     OTP_EXPIRE_MINUTES: int = 10
     OTP_RESEND_COOLDOWN_SECONDS: int = 60  # min seconds between resends
     OTP_MAX_RESENDS_PER_HOUR: int = 3  # hard cap per rolling hour
+
+    @model_validator(mode="after")
+    def validate_production_secrets(self) -> "Settings":
+        """
+        In production: crash immediately if insecure defaults are detected.
+        In development: emit a loud warning so developers notice.
+        """
+        is_production = self.ENVIRONMENT == "production"
+
+        issues: list[str] = []
+
+        if self.SECRET_KEY == _INSECURE_SECRET_KEY:
+            issues.append(
+                "SECRET_KEY is still the placeholder value — "
+                "generate one with: python -c \"import secrets; print(secrets.token_hex(32))\""
+            )
+
+        if self.DATABASE_URL == _DEFAULT_DATABASE_URL:
+            issues.append(
+                "DATABASE_URL is still the hardcoded local default — "
+                "set it to your actual database connection string"
+            )
+
+        if issues:
+            if is_production:
+                raise ValueError(
+                    "Refusing to start in production with insecure configuration:\n"
+                    + "\n".join(f"  • {i}" for i in issues)
+                )
+            for issue in issues:
+                _config_logger.warning("INSECURE CONFIG: %s", issue)
+
+        return self
 
     class Config:
         env_file = ".env"
