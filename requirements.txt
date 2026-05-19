@@ -53,3 +53,6 @@ python-docx>=1.1.0
 
 # Sentry — error tracking & performance monitoring
 sentry-sdk[fastapi]>=2.0.0
+
+# Prometheus — API metrics (Phase 4)
+prometheus-fastapi-instrumentator==6.1.0

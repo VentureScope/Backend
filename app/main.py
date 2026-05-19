@@ -11,6 +11,7 @@ import sentry_sdk
 from sentry_sdk.integrations.fastapi import FastApiIntegration
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from prometheus_fastapi_instrumentator import Instrumentator
 
 from app.api import (
     health, auth, users, admin, transcript_configs, transcripts,
@@ -148,3 +149,6 @@ app.include_router(admin_ml.router, prefix="/api/admin", tags=["admin-ml"])
 app.include_router(admin_taxonomy.router, prefix="/api/admin", tags=["admin-taxonomy"])
 app.include_router(admin_system.router, prefix="/api/admin", tags=["admin-system"])
 app.include_router(admin_sentry.router, prefix="/api/admin", tags=["admin-sentry"])
+
+# Phase 4 — Prometheus metrics endpoint (/metrics, scraped by Prometheus)
+Instrumentator().instrument(app).expose(app, endpoint="/metrics")

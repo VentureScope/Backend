@@ -102,5 +102,22 @@ services:
     ports:
       - "6379:6379"
 
+  # Phase 4 — Prometheus scrapes /metrics from the backend service
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    container_name: venturescope-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=15d"
+    profiles:
+      - monitoring  # Start with: docker-compose --profile monitoring up
+
 volumes:
   pgdata: {}
+  prometheus-data: {}
