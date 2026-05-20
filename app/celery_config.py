@@ -9,6 +9,13 @@ celery_app = Celery(
     "embedding_tasks",
     broker=settings.CELERY_BROKER_URL or settings.REDIS_URL,
     backend=settings.CELERY_RESULT_BACKEND or settings.REDIS_URL,
+    # Explicit task includes — guarantees every task module is loaded at
+    # worker startup regardless of autodiscovery package scanning.
+    include=[
+        "app.tasks.user_embedding_task",
+        "app.tasks.knowledge_embedding_task",
+        "app.tasks.org_embedding_task",
+    ],
 )
 
 celery_app.conf.update(
@@ -24,5 +31,3 @@ celery_app.conf.update(
     worker_prefetch_multiplier=1,
     worker_max_tasks_per_child=100,
 )
-
-celery_app.autodiscover_tasks(["app.tasks"])

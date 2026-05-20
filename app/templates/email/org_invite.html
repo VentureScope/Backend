@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>You're invited to join {{org_name}}</title>
+  <style>
+    body { margin: 0; padding: 0; background-color: #f4f4f5; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+    .wrapper { max-width: 560px; margin: 40px auto; background: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+    .header { background: linear-gradient(135deg, #4f46e5, #7c3aed); padding: 36px 40px; text-align: center; }
+    .header h1 { margin: 0; color: #ffffff; font-size: 22px; font-weight: 700; }
+    .header p { margin: 8px 0 0; color: rgba(255,255,255,0.85); font-size: 14px; }
+    .body { padding: 36px 40px; }
+    .body p { color: #374151; font-size: 15px; line-height: 1.6; margin: 0 0 16px; }
+    .org-card { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 16px 20px; margin: 20px 0; }
+    .org-card .org-name { font-size: 18px; font-weight: 700; color: #111827; }
+    .cta { text-align: center; margin: 28px 0; }
+    .btn { display: inline-block; background: #4f46e5; color: #ffffff; text-decoration: none; padding: 14px 32px; border-radius: 8px; font-size: 15px; font-weight: 600; }
+    .btn:hover { background: #4338ca; }
+    .note { font-size: 13px; color: #9ca3af; text-align: center; margin-top: 12px; }
+    .footer { background: #f9fafb; border-top: 1px solid #e5e7eb; padding: 20px 40px; text-align: center; }
+    .footer p { margin: 0; font-size: 12px; color: #9ca3af; }
+  </style>
+</head>
+<body>
+  <div class="wrapper">
+    <div class="header">
+      <h1>You're Invited!</h1>
+      <p>Join your team on VentureScope</p>
+    </div>
+    <div class="body">
+      <p>Hi there,</p>
+      <p><strong>{{inviter_name}}</strong> has invited you to join their organization on VentureScope.</p>
+      <div class="org-card">
+        <div class="org-name">{{org_name}}</div>
+      </div>
+      <p>VentureScope helps teams discover career paths, build learning roadmaps, and grow together. Accept the invite to join your team's workspace.</p>
+      <div class="cta">
+        <a href="{{invite_url}}" class="btn">Accept Invitation</a>
+      </div>
+      <p class="note">This invitation expires in {{expire_hours}} hours. If you didn't expect this invite, you can safely ignore this email.</p>
+    </div>
+    <div class="footer">
+      <p>&copy; {{year}} VentureScope. All rights reserved.</p>
+    </div>
+  </div>
+</body>
+</html>

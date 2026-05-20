@@ -34,6 +34,8 @@ from app.models.experience import Experience
 from app.models.job import Job
 from app.models.roadmap import LearningRoadmap, LearningRoadmapStep, LearningRoadmapStepResource, LearningRoadmapProgress
 from app.models.resume import Resume
+from app.models.organization import Organization, OrganizationMember, OrganizationInvite, OrganizationRoadmap
+from app.models.org_chat import OrgChatSession, OrgChatMessage
 
 # Set target metadata for autogenerate
 from app.core.database import Base
