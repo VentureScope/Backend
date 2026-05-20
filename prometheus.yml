@@ -1,0 +1,12 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: venturescope_backend
+    # Production (docker-compose): target is the backend service on Docker network
+    # Local dev (uvicorn on host, Prometheus in Docker): use host.docker.internal
+    static_configs:
+      - targets: ['host.docker.internal:8000']
+    scrape_interval: 15s
+    metrics_path: /metrics

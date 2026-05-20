@@ -4,17 +4,39 @@ VentureScope API – FastAPI application entry point.
 
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
 
+import sentry_sdk
+from sentry_sdk.integrations.fastapi import FastApiIntegration
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from prometheus_fastapi_instrumentator import Instrumentator
 
-from app.api import health, auth, users, admin, transcript_configs, transcripts, chat, notifications, mfa, jobs, roadmap, resume
+from app.api import (
+    health, auth, users, admin, transcript_configs, transcripts,
+    chat, notifications, mfa, jobs, roadmap, resume,
+    admin_ml, admin_taxonomy, admin_system, admin_sentry,
+)
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal
 from app.repositories.token_repository import TokenRepository
+from app.services.supabase_service import close_pool as close_supabase_pool
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Sentry SDK initialisation (no-op if SENTRY_DSN is empty)
+# ---------------------------------------------------------------------------
+if settings.SENTRY_DSN:
+    sentry_sdk.init(
+        dsn=settings.SENTRY_DSN,
+        server_name="backend-api",
+        environment=settings.SENTRY_ENVIRONMENT,
+        integrations=[FastApiIntegration()],
+        traces_sample_rate=settings.SENTRY_TRACES_SAMPLE_RATE,
+    )
+    logger.info("Sentry SDK initialised (environment=%s)", settings.SENTRY_ENVIRONMENT)
 
 # Background task control
 _cleanup_task: asyncio.Task | None = None
@@ -61,6 +83,9 @@ async def lifespan(app: FastAPI):
         except asyncio.CancelledError:
             pass
         logger.info("Stopped token blocklist cleanup background task")
+
+    await close_supabase_pool()
+    logger.info("Closed Supabase connection pool")
 
 
 app = FastAPI(
@@ -110,6 +135,7 @@ def root() -> dict:
     return {"message": "VentureScope API", "docs": "/docs"}
 
 
+
 app.include_router(health.router, prefix="/api", tags=["health"])
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(mfa.router, prefix="/api/auth/mfa", tags=["mfa"])
@@ -122,3 +148,12 @@ app.include_router(notifications.router)
 app.include_router(jobs.router)
 app.include_router(roadmap.router)
 app.include_router(resume.router)
+
+# Phase 2 — Super-admin dashboard endpoints
+app.include_router(admin_ml.router, prefix="/api/admin", tags=["admin-ml"])
+app.include_router(admin_taxonomy.router, prefix="/api/admin", tags=["admin-taxonomy"])
+app.include_router(admin_system.router, prefix="/api/admin", tags=["admin-system"])
+app.include_router(admin_sentry.router, prefix="/api/admin", tags=["admin-sentry"])
+
+# Phase 4 — Prometheus metrics endpoint (/metrics, scraped by Prometheus)
+Instrumentator().instrument(app).expose(app, endpoint="/metrics")

@@ -21,6 +21,7 @@ wheels/
 *.egg
 MANIFEST
 
+local_ignore/
 # Virtual environments
 venv/
 env/
@@ -28,6 +29,10 @@ ENV/
 env.bak/
 venv.bak/
 .venv/
+
+
+
+local_ignore/
 
 # Environment variables
 .env

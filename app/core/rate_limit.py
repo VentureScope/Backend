@@ -41,6 +41,10 @@ class RateLimiter:
         current_time = time.time()
         request_count, window_start = self._buckets[user_id]
 
+        # Periodic cleanup to prevent unbounded memory growth from unique IPs
+        if len(self._buckets) > 500:
+            self.cleanup_expired()
+
         # Check if we're in a new time window
         if current_time - window_start >= self.window_seconds:
             # Reset the window
@@ -53,7 +57,7 @@ class RateLimiter:
             time_remaining = int(self.window_seconds - (current_time - window_start))
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail=f"Rate limit exceeded. Maximum {self.max_requests} uploads per {self.window_seconds // 60} minutes. Try again in {time_remaining} seconds.",
+                detail=f"Rate limit exceeded. Try again in {time_remaining} seconds.",
                 headers={"Retry-After": str(time_remaining)},
             )
 

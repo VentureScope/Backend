@@ -3,11 +3,17 @@ Application configuration via environment variables.
 """
 
 import json
+import logging
 import os
 from typing import Any, List, Union
 from pydantic_settings import BaseSettings
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from functools import lru_cache
+
+_config_logger = logging.getLogger(__name__)
+
+_INSECURE_SECRET_KEY = "change-me-in-production-use-openssl-rand-hex-32"
+_DEFAULT_DATABASE_URL = "postgresql+asyncpg://venturescope:venturescope@localhost:5432/venturescope"
 
 
 def load_env_file():
@@ -213,6 +219,32 @@ class Settings(BaseSettings):
     CELERY_BROKER_URL: str = ""
     CELERY_RESULT_BACKEND: str = ""
 
+    # Supabase direct read connection (for admin dashboard queries)
+    SUPABASE_URL: str = ""  # psycopg2-compatible DSN for Supabase PostgreSQL
+
+    # Airflow REST API (for admin pipeline proxy)
+    AIRFLOW_API_URL: str = ""                    # e.g. http://airflow-webserver:8080/api/v1
+    AIRFLOW_SERVICE_ACCOUNT_USER: str = ""
+    AIRFLOW_SERVICE_ACCOUNT_PASSWORD: str = ""
+
+    # Sentry
+    SENTRY_DSN: str = ""
+    SENTRY_ENVIRONMENT: str = "production"
+    SENTRY_TRACES_SAMPLE_RATE: float = 0.2
+    SENTRY_AUTH_TOKEN: str = ""      # Internal integration token — project:read + org:read
+    SENTRY_ORG_SLUG: str = ""        # e.g. venturescope
+    SENTRY_PROJECT_SLUG: str = ""    # e.g. venturescope
+    SENTRY_WEBHOOK_SECRET: str = ""  # Shared secret for verifying inbound Sentry webhooks
+
+    # Pipeline webhook secret (CareerCompass → Backend HMAC-SHA256)
+    PIPELINE_WEBHOOK_SECRET: str = ""
+
+    # DO Spaces (S3-compatible) — scoped to models/ prefix for ML model deploy
+    DO_SPACES_KEY: str = ""
+    DO_SPACES_SECRET: str = ""
+    DO_SPACES_REGION: str = "lon1"
+    DO_SPACES_BUCKET: str = ""
+    DO_SPACES_ENDPOINT: str = ""  # e.g. https://lon1.digitaloceanspaces.com
     # Legacy: kept for backward-compat; no longer used at runtime
     REDIS_URL: str = ""
 
@@ -229,6 +261,39 @@ class Settings(BaseSettings):
     OTP_EXPIRE_MINUTES: int = 10
     OTP_RESEND_COOLDOWN_SECONDS: int = 60  # min seconds between resends
     OTP_MAX_RESENDS_PER_HOUR: int = 3  # hard cap per rolling hour
+
+    @model_validator(mode="after")
+    def validate_production_secrets(self) -> "Settings":
+        """
+        In production: crash immediately if insecure defaults are detected.
+        In development: emit a loud warning so developers notice.
+        """
+        is_production = self.ENVIRONMENT == "production"
+
+        issues: list[str] = []
+
+        if self.SECRET_KEY == _INSECURE_SECRET_KEY:
+            issues.append(
+                "SECRET_KEY is still the placeholder value — "
+                "generate one with: python -c \"import secrets; print(secrets.token_hex(32))\""
+            )
+
+        if self.DATABASE_URL == _DEFAULT_DATABASE_URL:
+            issues.append(
+                "DATABASE_URL is still the hardcoded local default — "
+                "set it to your actual database connection string"
+            )
+
+        if issues:
+            if is_production:
+                raise ValueError(
+                    "Refusing to start in production with insecure configuration:\n"
+                    + "\n".join(f"  • {i}" for i in issues)
+                )
+            for issue in issues:
+                _config_logger.warning("INSECURE CONFIG: %s", issue)
+
+        return self
 
     class Config:
         env_file = ".env"

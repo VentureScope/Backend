@@ -87,8 +87,7 @@ class User(Base):
         Boolean, default=False, nullable=False
     )  # True after OTP email verification (or OAuth signup)
 
-    # MFA tracking columns (application-level display/UX — source of truth is
-    # the TOTP service which stores encrypted secrets separately)
+    # MFA tracking columns
     mfa_enabled: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False
     )
