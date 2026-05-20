@@ -26,11 +26,21 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata
+      - name: Extract metadata for API image
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/venturescope/backend
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix=
+            type=raw,value=latest
+
+      - name: Extract metadata for Worker image
+        id: meta-worker
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/venturescope/backend-worker
           tags: |
             type=ref,event=branch
             type=sha,prefix=
@@ -44,8 +54,8 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=registry,ref=ghcr.io/venturescope/backend:latest
+          cache-to: type=inline
 
       - name: Build and push Worker image
         uses: docker/build-push-action@v5
@@ -53,14 +63,10 @@ jobs:
           context: .
           file: ./Dockerfile.worker
           push: true
-          tags: |
-            ghcr.io/venturescope/backend-worker:${{ github.sha }}
-            ghcr.io/venturescope/backend-worker:latest
-          labels: |
-            org.opencontainers.image.source=${{ github.repository-url }}
-            org.opencontainers.image.title=venturescope-worker
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          tags: ${{ steps.meta-worker.outputs.tags }}
+          labels: ${{ steps.meta-worker.outputs.labels }}
+          cache-from: type=registry,ref=ghcr.io/venturescope/backend-worker:latest
+          cache-to: type=inline
 
       - name: Azure Login
         uses: azure/login@v1
@@ -72,11 +78,11 @@ jobs:
           az containerapp update \
             --name venturescope \
             --resource-group ${{ secrets.AZURE_RG }} \
-            --image ghcr.io/venturescope/backend:latest
+            --image ghcr.io/venturescope/backend:${{ github.sha }}
 
       - name: Deploy Worker to Azure Container Apps
         run: |
           az containerapp update \
             --name backgroundworker \
             --resource-group ${{ secrets.AZURE_RG }} \
-            --image ghcr.io/venturescope/backend-worker:latest
+            --image ghcr.io/venturescope/backend-worker:${{ github.sha }}
