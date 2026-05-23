@@ -176,14 +176,15 @@ async def deploy_ml_run(
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc))
 
-    now_iso = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
     admin_email = current_admin.email
 
     try:
         await svc.update_ml_training_run_status(
             run_id,
             status="deployed",
-            deployed_at=now_iso,
+            deployed_at=now,
             deployed_by=admin_email,
         )
         model_type = run.get("model_type", "")

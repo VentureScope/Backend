@@ -15,6 +15,7 @@ process. Configure via SUPABASE_URL env var:
 
 import asyncio
 import logging
+from datetime import datetime
 from typing import Any
 
 import asyncpg
@@ -149,7 +150,7 @@ class SupabaseService:
         run_id: str,
         *,
         status: str,
-        deployed_at: str | None = None,
+        deployed_at: datetime | None = None,
         deployed_by: str | None = None,
     ) -> None:
         """Update status (and optional deploy fields) on a training run."""
