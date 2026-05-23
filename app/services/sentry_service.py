@@ -129,11 +129,11 @@ class SentryService:
                     f"/organizations/{self._org}/stats_v2/",
                     params={
                         "project": self._project_id,
-                        "field": "count()",
+                        "field": "sum(times_seen)",
                         "interval": "1d",
                         "statsPeriod": "7d",
+                        "groupBy": "outcome",
                         "category": "error",
-                        "outcome": "accepted",
                     },
                 ),
                 client.get(
@@ -141,7 +141,7 @@ class SentryService:
                     params={
                         "project": self._project_id,
                         "field": ["p95(transaction.duration)", "apdex()"],
-                        "query": "event.type:transaction server_name:backend-api",
+                        "query": "event.type:transaction",
                         "statsPeriod": "24h",
                         "per_page": 1,
                     },
@@ -150,11 +150,11 @@ class SentryService:
                     f"/organizations/{self._org}/stats_v2/",
                     params={
                         "project": self._project_id,
-                        "field": "count()",
+                        "field": "sum(times_seen)",
                         "interval": "24h",
                         "statsPeriod": "48h",
+                        "groupBy": "outcome",
                         "category": "error",
-                        "outcome": "accepted",
                     },
                 ),
             )
@@ -181,16 +181,21 @@ class SentryService:
         unresolved_24h = sum(int(i.get("count", 0)) for i in issues_data)
 
         # --- Parse 7-day sparkline ---
+        # stats_v2 returns groups per outcome; we want the "accepted" series.
         sparkline: list[dict] = []
         if stats_resp.status_code == 200:
             stats_data = stats_resp.json()
             intervals = stats_data.get("intervals", [])
             groups = stats_data.get("groups", [])
-            if groups:
-                totals = groups[0].get("totals", {}).get("count()", [])
+            accepted_group = next(
+                (g for g in groups if g.get("by", {}).get("outcome") == "accepted"),
+                groups[0] if groups else None,
+            )
+            if accepted_group:
+                series = accepted_group.get("series", {}).get("sum(times_seen)", [])
                 sparkline = [
-                    {"date": intervals[i], "count": totals[i]}
-                    for i in range(min(len(intervals), len(totals)))
+                    {"date": intervals[i], "count": series[i]}
+                    for i in range(min(len(intervals), len(series)))
                 ]
 
         # --- Parse performance ---
@@ -205,14 +210,21 @@ class SentryService:
                 apdex = row.get("apdex()")
 
         # --- Parse trend delta ---
+        # Compare accepted errors: last 24h vs prior 24h.
+        # stats_v2 with statsPeriod=48h&interval=24h returns 3 buckets (day-2, day-1, day-0).
+        # We use the last two accepted-outcome buckets for the delta.
         trend_delta: int | None = None
         if prior_resp.status_code == 200:
             prior_data = prior_resp.json()
             prior_groups = prior_data.get("groups", [])
-            if prior_groups:
-                prior_totals = prior_groups[0].get("totals", {}).get("count()", [])
-                if len(prior_totals) >= 2:
-                    trend_delta = int(prior_totals[-1]) - int(prior_totals[-2])
+            accepted_prior = next(
+                (g for g in prior_groups if g.get("by", {}).get("outcome") == "accepted"),
+                prior_groups[0] if prior_groups else None,
+            )
+            if accepted_prior:
+                prior_series = accepted_prior.get("series", {}).get("sum(times_seen)", [])
+                if len(prior_series) >= 2:
+                    trend_delta = int(prior_series[-1]) - int(prior_series[-2])
 
         return {
             "unresolved_24h": unresolved_24h,
