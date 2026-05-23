@@ -265,6 +265,44 @@ class SupabaseService:
         return dict(row) if row else None
 
     # ------------------------------------------------------------------
+    # Job forecasts (ensemble of Prophet + LSTM predictions)
+    # ------------------------------------------------------------------
+
+    async def get_job_forecasts(
+        self,
+        *,
+        normalized_title: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """
+        Return ensemble forecast rows (averaged across Prophet and LSTM).
+        Optionally filter by a specific normalized_title.
+        """
+        pool = await _get_pool()
+
+        if normalized_title:
+            rows = await pool.fetch(
+                """
+                SELECT normalized_title, forecast_date, predicted_count,
+                       lower_bound, upper_bound
+                FROM job_forecasts_ensemble
+                WHERE normalized_title = $1
+                ORDER BY forecast_date
+                """,
+                normalized_title,
+            )
+        else:
+            rows = await pool.fetch(
+                """
+                SELECT normalized_title, forecast_date, predicted_count,
+                       lower_bound, upper_bound
+                FROM job_forecasts_ensemble
+                ORDER BY normalized_title, forecast_date
+                """
+            )
+
+        return [dict(r) for r in rows]
+
+    # ------------------------------------------------------------------
     # Overview / stats (used by frontend summary cards)
     # ------------------------------------------------------------------
 
