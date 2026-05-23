@@ -68,14 +68,15 @@ class SentryService:
 
     def __init__(self) -> None:
         self._org = settings.SENTRY_ORG_SLUG
-        self._project = settings.SENTRY_PROJECT_SLUG
+        self._project_slug = settings.SENTRY_PROJECT_SLUG  # used for deep-links only
+        self._project_id = settings.SENTRY_PROJECT_ID      # numeric ID required by API filters
         self._token = settings.SENTRY_AUTH_TOKEN
 
     def _require_config(self) -> None:
-        if not self._token or not self._org or not self._project:
+        if not self._token or not self._org or not self._project_id:
             raise SentryServiceError(
                 "Sentry is not configured. "
-                "Set SENTRY_AUTH_TOKEN, SENTRY_ORG_SLUG, SENTRY_PROJECT_SLUG.",
+                "Set SENTRY_AUTH_TOKEN, SENTRY_ORG_SLUG, SENTRY_PROJECT_ID.",
                 status_code=503,
             )
 
@@ -111,12 +112,13 @@ class SentryService:
 
     async def _fetch_summary(self) -> dict[str, Any]:
         async with self._client() as client:
-            # Fire all 4 Sentry API calls concurrently
+            # Fire all 4 Sentry API calls concurrently.
+            # project param must be the numeric project ID, not the slug.
             issues_resp, stats_resp, perf_resp, prior_resp = await asyncio.gather(
                 client.get(
                     f"/organizations/{self._org}/issues/",
                     params={
-                        "project": self._project,
+                        "project": self._project_id,
                         "query": "is:unresolved",
                         "statsPeriod": "24h",
                         "limit": 5,
@@ -126,7 +128,7 @@ class SentryService:
                 client.get(
                     f"/organizations/{self._org}/stats_v2/",
                     params={
-                        "project": self._project,
+                        "project": self._project_id,
                         "field": "count()",
                         "interval": "1d",
                         "statsPeriod": "7d",
@@ -137,7 +139,7 @@ class SentryService:
                 client.get(
                     f"/organizations/{self._org}/events/",
                     params={
-                        "project": self._project,
+                        "project": self._project_id,
                         "field": ["p95(transaction.duration)", "apdex()"],
                         "query": "event.type:transaction server_name:backend-api",
                         "statsPeriod": "24h",
@@ -147,7 +149,7 @@ class SentryService:
                 client.get(
                     f"/organizations/{self._org}/stats_v2/",
                     params={
-                        "project": self._project,
+                        "project": self._project_id,
                         "field": "count()",
                         "interval": "24h",
                         "statsPeriod": "48h",
@@ -160,7 +162,7 @@ class SentryService:
         # --- Parse issues ---
         if issues_resp.status_code != 200:
             raise SentryServiceError(
-                f"Sentry issues API error: {issues_resp.status_code}",
+                f"Sentry issues API error: {issues_resp.status_code} — {issues_resp.text[:300]}",
             )
         issues_data = issues_resp.json()
         top_issues = [
@@ -221,7 +223,7 @@ class SentryService:
             "seven_day_sparkline": sparkline,
             "sentry_issues_url": (
                 f"https://sentry.io/organizations/{self._org}/issues/"
-                f"?project={self._project}"
+                f"?project={self._project_id}"
             ),
             "sentry_performance_url": (
                 f"https://sentry.io/organizations/{self._org}/performance/"

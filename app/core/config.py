@@ -234,7 +234,8 @@ class Settings(BaseSettings):
     SENTRY_TRACES_SAMPLE_RATE: float = 0.2
     SENTRY_AUTH_TOKEN: str = ""      # Internal integration token — project:read + org:read
     SENTRY_ORG_SLUG: str = ""        # e.g. venturescope
-    SENTRY_PROJECT_SLUG: str = ""    # e.g. venturescope
+    SENTRY_PROJECT_SLUG: str = ""    # e.g. venturescope (used for deep-links only)
+    SENTRY_PROJECT_ID: str = ""      # Numeric project ID — required for API filters (issues, stats_v2, events)
     SENTRY_WEBHOOK_SECRET: str = ""  # Shared secret for verifying inbound Sentry webhooks
 
     # Pipeline webhook secret (CareerCompass → Backend HMAC-SHA256)
