@@ -97,3 +97,37 @@ class KnowledgeRepository:
         )
         result = await self.db.execute(query)
         return list(result.scalars().all())
+
+    async def search_across_users(
+        self,
+        user_ids: list[str],
+        query_embedding: list[float],
+        limit: int = 15,
+        source_types: list[str] | None = None,
+    ) -> list[UserKnowledge]:
+        """
+        Vector similarity search across MULTIPLE users' knowledge chunks.
+        Used by the org advisor to search knowledge from all org members.
+
+        Only completed embeddings are considered.
+        Results are ranked by cosine similarity across the entire member pool.
+        """
+        if not user_ids:
+            return []
+
+        conditions = [
+            UserKnowledge.user_id.in_(user_ids),
+            UserKnowledge.embedding_status == "completed",
+            UserKnowledge.embedding.is_not(None),
+        ]
+        if source_types:
+            conditions.append(UserKnowledge.source_type.in_(source_types))
+
+        query = (
+            select(UserKnowledge)
+            .where(*conditions)
+            .order_by(UserKnowledge.embedding.cosine_distance(query_embedding))
+            .limit(limit)
+        )
+        result = await self.db.execute(query)
+        return list(result.scalars().all())

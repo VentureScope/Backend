@@ -117,6 +117,139 @@ class RoadmapService:
         loaded = await self.repo.get_by_id(roadmap.id, user_id)
         return loaded
 
+    # ------------------------------------------------------------------
+    # Resource toggle — primary progress mechanism
+    # ------------------------------------------------------------------
+
+    async def toggle_resource(
+        self, user_id: str, resource_id: str, completed: bool
+    ) -> dict:
+        """
+        Check or uncheck a single resource for the current user.
+
+        Side effects (all automatic):
+          - Upserts learning_roadmap_resource_progress
+          - Derives step status from resource completion count
+          - Updates learning_roadmap_progress.status
+          - Derives roadmap status from step completion count
+          - Updates learning_roadmaps.status
+        """
+        from fastapi import HTTPException
+        from sqlalchemy import select
+        from app.models.roadmap import LearningRoadmapStep
+
+        # 1. Load the resource
+        resource = await self.repo.get_resource(resource_id)
+        if not resource:
+            raise HTTPException(status_code=404, detail="Resource not found.")
+
+        step_id = resource.step_id
+
+        # 2. Upsert resource progress
+        rp = await self.repo.upsert_resource_progress(
+            user_id=user_id,
+            resource_id=resource_id,
+            step_id=step_id,
+            completed=completed,
+        )
+
+        # 3. Load the step with all its resources + resource_progress
+        step = await self.repo.get_step(step_id)
+        if not step:
+            raise HTTPException(status_code=404, detail="Step not found.")
+
+        total_resources = len(step.resources)
+
+        # 4. Count completed resources for this user in this step
+        completed_resources = sum(
+            1 for r in step.resources
+            if any(
+                p.user_id == user_id and p.completed
+                for p in r.resource_progress
+            )
+        )
+
+        # 5. Derive step status
+        if completed_resources == 0:
+            new_step_status = "not_started"
+        elif completed_resources < total_resources:
+            new_step_status = "in_progress"
+        else:
+            new_step_status = "completed"
+
+        # 6. Update step progress record
+        step_progress = await self.repo.get_progress(user_id, step_id)
+        if step_progress:
+            await self.repo.update_progress(step_progress, new_step_status)
+        else:
+            # Create missing progress record (e.g. org member enrolled after creation)
+            await self.repo.create_progress({
+                "user_id": user_id,
+                "step_id": step_id,
+                "status": new_step_status,
+            })
+
+        # 7. Recalculate roadmap-level stats
+        roadmap = await self.repo.get_by_id_any_user(step.roadmap_id)
+        roadmap_status = "not_started"
+        steps_completed = 0
+        total_steps = 0
+
+        if roadmap:
+            total_steps = len(roadmap.steps)
+            progress_statuses = []
+            for s in roadmap.steps:
+                for p in s.progress:
+                    if p.user_id == user_id:
+                        # Use freshly derived status for current step
+                        if s.id == step_id:
+                            progress_statuses.append(new_step_status)
+                        else:
+                            progress_statuses.append(p.status)
+                        break
+                else:
+                    progress_statuses.append("not_started")
+
+            steps_completed = progress_statuses.count("completed")
+
+            if total_steps > 0 and steps_completed == total_steps:
+                roadmap_status = "completed"
+            elif any(s in ("in_progress", "completed") for s in progress_statuses):
+                roadmap_status = "in_progress"
+            else:
+                roadmap_status = "not_started"
+
+            await self.repo.update_roadmap_status(step.roadmap_id, roadmap_status)
+
+        await self.db.commit()
+
+        completion_percentage = (
+            round(steps_completed / total_steps * 100, 1) if total_steps else 0.0
+        )
+        resource_completion_pct = (
+            round(completed_resources / total_resources * 100, 1)
+            if total_resources else 0.0
+        )
+
+        return {
+            "resource_id": resource_id,
+            "completed": rp.completed,
+            "completed_at": rp.completed_at,
+            "step_id": step_id,
+            "step_status": new_step_status,
+            "resources_completed": completed_resources,
+            "total_resources": total_resources,
+            "resource_completion_pct": resource_completion_pct,
+            "roadmap_status": roadmap_status,
+            "steps_completed": steps_completed,
+            "total_steps": total_steps,
+            "completion_percentage": completion_percentage,
+        }
+
+    # ------------------------------------------------------------------
+    # Step progress — manual override (kept for flexibility)
+    # ------------------------------------------------------------------
+
     async def update_step_progress(
         self, user_id: str, step_id: str, status: str, notes: str | None = None
     ) -> dict:
@@ -135,6 +268,31 @@ class RoadmapService:
             raise HTTPException(status_code=404, detail="Progress not found")
 
         await self.repo.update_progress(progress, status, notes)
+
+        # --- Sync resource progress with manual override ---
+        # Load the step with its resources to keep checkbox state consistent
+        from app.models.roadmap import LearningRoadmapStep
+        step_for_sync_result = await self.db.execute(
+            select(LearningRoadmapStep).where(LearningRoadmapStep.id == step_id)
+        )
+        step_for_sync = step_for_sync_result.scalar_one_or_none()
+        if step_for_sync:
+            from sqlalchemy.orm import selectinload
+            from app.models.roadmap import LearningRoadmapStepResource
+            from sqlalchemy.ext.asyncio import AsyncSession
+            step_with_resources = await self.repo.get_step(step_id)
+            if step_with_resources:
+                if status == "completed":
+                    # Mark all resources as completed
+                    await self.repo.mark_all_resources_in_step(
+                        user_id=user_id,
+                        step_id=step_id,
+                        resources=step_with_resources.resources,
+                        completed=True,
+                    )
+                elif status == "not_started":
+                    # Clear all resource progress
+                    await self.repo.clear_resource_progress_for_step(user_id, step_id)
 
         # --- Auto-update roadmap status ---
         # Find the roadmap this step belongs to

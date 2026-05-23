@@ -17,7 +17,9 @@ from app.api import (
     health, auth, users, admin, transcript_configs, transcripts,
     chat, notifications, mfa, jobs, roadmap, resume,
     admin_ml, admin_taxonomy, admin_system, admin_sentry,
+    organizations,
 )
+from app.api import org_chat
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal
 from app.repositories.token_repository import TokenRepository
@@ -148,6 +150,10 @@ app.include_router(notifications.router)
 app.include_router(jobs.router)
 app.include_router(roadmap.router)
 app.include_router(resume.router)
+
+# Organizations
+app.include_router(organizations.router)
+app.include_router(org_chat.router)
 
 # Phase 2 — Super-admin dashboard endpoints
 app.include_router(admin_ml.router, prefix="/api/admin", tags=["admin-ml"])

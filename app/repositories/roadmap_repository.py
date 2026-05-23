@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, delete
 from sqlalchemy.orm import selectinload
 import uuid
 
@@ -9,6 +9,7 @@ from app.models.roadmap import (
     LearningRoadmapStep,
     LearningRoadmapStepResource,
     LearningRoadmapProgress,
+    LearningRoadmapResourceProgress,
 )
 
 
@@ -16,11 +17,15 @@ class RoadmapRepository:
     def __init__(self, db: AsyncSession):
         self.db = db
 
+    # ------------------------------------------------------------------
+    # Roadmap queries — all eagerly load resource_progress alongside resources
+    # ------------------------------------------------------------------
+
     async def list_by_user(self, user_id: str) -> list[LearningRoadmap]:
         """
-        List all roadmaps for a user, eagerly loading steps and their
-        progress rows so completion stats can be computed without extra
-        queries.
+        List all roadmaps for a user, eagerly loading steps, progress,
+        resources, and resource_progress so completion stats can be
+        computed without extra queries.
         """
         result = await self.db.execute(
             select(LearningRoadmap)
@@ -28,6 +33,9 @@ class RoadmapRepository:
             .options(
                 selectinload(LearningRoadmap.steps)
                 .selectinload(LearningRoadmapStep.progress),
+                selectinload(LearningRoadmap.steps)
+                .selectinload(LearningRoadmapStep.resources)
+                .selectinload(LearningRoadmapStepResource.resource_progress),
             )
             .order_by(LearningRoadmap.created_at.desc())
         )
@@ -44,7 +52,8 @@ class RoadmapRepository:
             )
             .options(
                 selectinload(LearningRoadmap.steps)
-                .selectinload(LearningRoadmapStep.resources),
+                .selectinload(LearningRoadmapStep.resources)
+                .selectinload(LearningRoadmapStepResource.resource_progress),
                 selectinload(LearningRoadmap.steps)
                 .selectinload(LearningRoadmapStep.progress),
             )
@@ -54,7 +63,7 @@ class RoadmapRepository:
     async def get_by_id_any_user(self, roadmap_id: str) -> LearningRoadmap | None:
         """
         Fetch a roadmap by ID without user ownership check.
-        Used internally by update_step_progress to reload roadmap stats.
+        Used internally by toggle_resource and update_step_progress.
         """
         result = await self.db.execute(
             select(LearningRoadmap)
@@ -62,9 +71,16 @@ class RoadmapRepository:
             .options(
                 selectinload(LearningRoadmap.steps)
                 .selectinload(LearningRoadmapStep.progress),
+                selectinload(LearningRoadmap.steps)
+                .selectinload(LearningRoadmapStep.resources)
+                .selectinload(LearningRoadmapStepResource.resource_progress),
             )
         )
         return result.scalar_one_or_none()
+
+    # ------------------------------------------------------------------
+    # CRUD helpers
+    # ------------------------------------------------------------------
 
     async def create_roadmap(self, data: dict) -> LearningRoadmap:
         roadmap = LearningRoadmap(
@@ -136,19 +152,125 @@ class RoadmapRepository:
         if status == "completed":
             progress.completed_at = datetime.now(timezone.utc)
         else:
-            # Clear completed_at if reverting from completed
             progress.completed_at = None
         if notes is not None:
             progress.notes = notes
         return progress
 
-    async def update_roadmap_status(
-        self, roadmap_id: str, status: str
-    ) -> None:
-        """Update the overall status of a roadmap."""
+    async def update_roadmap_status(self, roadmap_id: str, status: str) -> None:
         result = await self.db.execute(
             select(LearningRoadmap).where(LearningRoadmap.id == roadmap_id)
         )
         roadmap = result.scalar_one_or_none()
         if roadmap:
             roadmap.status = status
+
+    # ------------------------------------------------------------------
+    # Resource — fetch helpers
+    # ------------------------------------------------------------------
+
+    async def get_resource(self, resource_id: str) -> LearningRoadmapStepResource | None:
+        """Fetch a resource by ID, loading its parent step."""
+        result = await self.db.execute(
+            select(LearningRoadmapStepResource)
+            .where(LearningRoadmapStepResource.id == resource_id)
+        )
+        return result.scalar_one_or_none()
+
+    async def get_step(self, step_id: str) -> LearningRoadmapStep | None:
+        """Fetch a step with its resources (for counting)."""
+        result = await self.db.execute(
+            select(LearningRoadmapStep)
+            .where(LearningRoadmapStep.id == step_id)
+            .options(
+                selectinload(LearningRoadmapStep.resources)
+                .selectinload(LearningRoadmapStepResource.resource_progress),
+            )
+        )
+        return result.scalar_one_or_none()
+
+    # ------------------------------------------------------------------
+    # Resource progress — new methods
+    # ------------------------------------------------------------------
+
+    async def get_resource_progress(
+        self, user_id: str, resource_id: str
+    ) -> LearningRoadmapResourceProgress | None:
+        result = await self.db.execute(
+            select(LearningRoadmapResourceProgress).where(
+                LearningRoadmapResourceProgress.user_id == user_id,
+                LearningRoadmapResourceProgress.resource_id == resource_id,
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def upsert_resource_progress(
+        self,
+        user_id: str,
+        resource_id: str,
+        step_id: str,
+        completed: bool,
+    ) -> LearningRoadmapResourceProgress:
+        """
+        Create or update resource progress for a user.
+        Sets completed_at when marking complete; clears it when unchecking.
+        """
+        existing = await self.get_resource_progress(user_id, resource_id)
+        now = datetime.now(timezone.utc)
+
+        if existing:
+            existing.completed = completed
+            existing.completed_at = now if completed else None
+            await self.db.flush()
+            return existing
+        else:
+            rp = LearningRoadmapResourceProgress(
+                id=str(uuid.uuid4()),
+                user_id=user_id,
+                resource_id=resource_id,
+                step_id=step_id,
+                completed=completed,
+                completed_at=now if completed else None,
+            )
+            self.db.add(rp)
+            await self.db.flush()
+            return rp
+
+    async def get_resource_progress_for_step(
+        self, user_id: str, step_id: str
+    ) -> list[LearningRoadmapResourceProgress]:
+        """Return all resource progress rows for a user in a specific step."""
+        result = await self.db.execute(
+            select(LearningRoadmapResourceProgress).where(
+                LearningRoadmapResourceProgress.user_id == user_id,
+                LearningRoadmapResourceProgress.step_id == step_id,
+            )
+        )
+        return list(result.scalars().all())
+
+    async def clear_resource_progress_for_step(
+        self, user_id: str, step_id: str
+    ) -> None:
+        """Delete all resource progress rows for a user in a step (used by manual override)."""
+        await self.db.execute(
+            delete(LearningRoadmapResourceProgress).where(
+                LearningRoadmapResourceProgress.user_id == user_id,
+                LearningRoadmapResourceProgress.step_id == step_id,
+            )
+        )
+        await self.db.flush()
+
+    async def mark_all_resources_in_step(
+        self, user_id: str, step_id: str, resources: list[LearningRoadmapStepResource], completed: bool
+    ) -> None:
+        """
+        Set all resources in a step to completed=True or False.
+        Used by the manual step override to keep resource state in sync.
+        """
+        for resource in resources:
+            await self.upsert_resource_progress(
+                user_id=user_id,
+                resource_id=resource.id,
+                step_id=step_id,
+                completed=completed,
+            )

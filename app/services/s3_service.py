@@ -85,12 +85,33 @@ class S3Service:
     def _get_profile_picture_url(self, s3_key: str) -> str:
         """Generate public URL for the uploaded profile picture."""
         if settings.S3_ENDPOINT_URL:
-            # Supabase Storage format: https://{project}.supabase.co/storage/v1/object/public/{bucket}/{key}
             base_url = settings.S3_ENDPOINT_URL.split("/storage/v1/s3")[0]
             return f"{base_url}/storage/v1/object/public/{settings.S3_PROFILE_PICTURE_BUCKET}/{s3_key}"
         else:
-            # AWS S3
             return f"https://{settings.S3_PROFILE_PICTURE_BUCKET}.s3.{settings.AWS_REGION}.amazonaws.com/{s3_key}"
+
+    def _get_org_logo_url(self, s3_key: str) -> str:
+        """Generate public URL for an org logo in the organization bucket."""
+        if settings.S3_ENDPOINT_URL:
+            base_url = settings.S3_ENDPOINT_URL.split("/storage/v1/s3")[0]
+            return f"{base_url}/storage/v1/object/public/{settings.S3_ORG_BUCKET}/{s3_key}"
+        else:
+            return f"https://{settings.S3_ORG_BUCKET}.s3.{settings.AWS_REGION}.amazonaws.com/{s3_key}"
+
+    def _extract_key_from_org_logo_url(self, url: str) -> str | None:
+        """Extract S3 key from an org logo URL."""
+        if settings.S3_ENDPOINT_URL and ".supabase.co" in url:
+            prefix = f"/storage/v1/object/public/{settings.S3_ORG_BUCKET}/"
+            if prefix in url:
+                return url.split(prefix)[1]
+            return None
+        else:
+            parts = url.split(
+                f"{settings.S3_ORG_BUCKET}.s3.{settings.AWS_REGION}.amazonaws.com/"
+            )
+            if len(parts) > 1:
+                return parts[1]
+            return None
 
     def _extract_key_from_url(self, url: str) -> str | None:
         """Extract S3 key from URL."""
@@ -263,6 +284,84 @@ class S3Service:
             if len(parts) > 1:
                 return parts[1]
             return None
+
+    async def upload_org_logo(
+        self,
+        org_id: str,
+        file_content: bytes,
+        filename: str,
+        content_type: str,
+    ) -> str:
+        """
+        Upload an organization logo to the dedicated 'organization' bucket.
+
+        Stored at: logos/org_{org_id}/{unique_id}.{ext}
+
+        Args:
+            org_id: The organization's ID
+            file_content: Image bytes
+            filename: Original filename
+            content_type: MIME type (image/jpeg, image/png, image/webp)
+
+        Returns:
+            Public URL of the uploaded logo
+
+        Raises:
+            S3UploadError: If upload fails
+        """
+        if len(file_content) > self.MAX_IMAGE_SIZE:
+            raise S3UploadError(
+                f"Image too large. Maximum size is {self.MAX_IMAGE_SIZE // (1024 * 1024)}MB"
+            )
+
+        if content_type not in self.ALLOWED_IMAGE_TYPES:
+            raise S3UploadError(
+                f"Invalid file type. Allowed types: {', '.join(self.ALLOWED_IMAGE_TYPES)}"
+            )
+
+        ext = filename.rsplit(".", 1)[-1] if "." in filename else "jpg"
+        unique_id = uuid.uuid4().hex[:8]
+        s3_key = f"logos/org_{org_id}/{unique_id}.{ext}"
+
+        try:
+            self.s3_client.put_object(
+                Bucket=settings.S3_ORG_BUCKET,
+                Key=s3_key,
+                Body=file_content,
+                ContentType=content_type,
+                Metadata={
+                    "org_id": org_id,
+                    "original_filename": filename,
+                },
+            )
+            return self._get_org_logo_url(s3_key)
+
+        except ClientError as e:
+            raise S3UploadError(f"Failed to upload org logo: {e}")
+
+    async def delete_org_logo(self, logo_url: str) -> bool:
+        """
+        Delete an org logo from the 'organization' bucket.
+
+        Args:
+            logo_url: Full public URL of the logo
+
+        Returns:
+            True if deletion was successful, False otherwise
+        """
+        try:
+            s3_key = self._extract_key_from_org_logo_url(logo_url)
+            if not s3_key:
+                return False
+
+            self.s3_client.delete_object(
+                Bucket=settings.S3_ORG_BUCKET,
+                Key=s3_key,
+            )
+            return True
+
+        except ClientError:
+            return False
 
     def get_presigned_url(self, cv_url: str, expiration: int = 3600) -> str | None:
         """

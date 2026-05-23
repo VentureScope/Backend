@@ -11,6 +11,8 @@ from app.schemas.roadmap import (
     StepProgressUpdate,
     StepProgressUpdateOut,
     ResourceOut,
+    ResourceToggleRequest,
+    ResourceToggleOut,
     StepProgressOut,
 )
 from app.api.deps import get_current_user
@@ -65,6 +67,36 @@ async def create_roadmap(
     return _build_roadmap_out(roadmap, current_user.id)
 
 
+@router.post("/resources/{resource_id}/toggle", response_model=ResourceToggleOut)
+async def toggle_resource_progress(
+    resource_id: str,
+    req: ResourceToggleRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Check or uncheck a resource for the current user.
+
+    Automatically cascades upward:
+    - Updates the parent step status:
+        0 resources done   → not_started
+        some resources done → in_progress
+        all resources done  → completed
+    - Updates the roadmap overall status accordingly.
+
+    Returns all updated stats in one response so the frontend can
+    refresh all progress bars without additional calls.
+
+    Works for both personal roadmaps and org team roadmaps.
+    """
+    service = RoadmapService(db)
+    return await service.toggle_resource(
+        user_id=current_user.id,
+        resource_id=resource_id,
+        completed=req.completed,
+    )
+
+
 @router.patch("/steps/{step_id}/progress", response_model=StepProgressUpdateOut)
 async def update_step_progress(
     step_id: str,
@@ -73,14 +105,13 @@ async def update_step_progress(
     current_user: User = Depends(get_current_user),
 ):
     """
-    Update progress for a single roadmap step.
+    Manually override a step's status (not_started | in_progress | completed).
 
-    - Valid statuses: `not_started`, `in_progress`, `completed`
-    - Automatically updates the parent roadmap status:
-      - All steps completed → roadmap `completed`
-      - Any step started   → roadmap `in_progress`
-      - All not started    → roadmap `not_started`
-    - Returns updated step state + roadmap-level completion stats.
+    When set to 'completed' → all resources in the step are also marked complete.
+    When set to 'not_started' → all resource progress for the step is cleared.
+    This keeps the resource checkboxes in sync with the manual override.
+
+    Prefer using POST /resources/{id}/toggle for the normal checkbox flow.
     """
     service = RoadmapService(db)
     return await service.update_step_progress(
@@ -95,11 +126,29 @@ async def update_step_progress(
 # Builder helpers
 # ---------------------------------------------------------------------------
 
+def _get_resource_completion(resource, user_id: str) -> tuple[bool, object]:
+    """Return (completed, completed_at) for a resource for a specific user."""
+    for rp in (resource.resource_progress or []):
+        if rp.user_id == user_id:
+            return rp.completed, rp.completed_at
+    return False, None
+
+
+def _build_step_resource_stats(step, user_id: str) -> tuple[int, int, float]:
+    """Return (resources_completed, total_resources, resource_completion_pct) for a step."""
+    total = len(step.resources)
+    if total == 0:
+        return 0, 0, 0.0
+    completed = sum(
+        1 for r in step.resources
+        if any(rp.user_id == user_id and rp.completed for rp in r.resource_progress)
+    )
+    pct = round(completed / total * 100, 1)
+    return completed, total, pct
+
+
 def _build_progress_stats(roadmap, user_id: str) -> tuple[int, int, float]:
-    """
-    Returns (steps_completed, total_steps, completion_percentage).
-    Works with both list (steps + progress loaded) and detail views.
-    """
+    """Returns (steps_completed, total_steps, completion_percentage)."""
     total = len(roadmap.steps)
     if total == 0:
         return 0, 0, 0.0
@@ -117,10 +166,6 @@ def _build_progress_stats(roadmap, user_id: str) -> tuple[int, int, float]:
 
 
 def _build_summary(roadmap) -> str:
-    """
-    Auto-compute a human-readable summary from the roadmap's steps.
-    e.g. "8-week roadmap covering: Python Basics, Data Structures, OOP, ..."
-    """
     sorted_steps = sorted(roadmap.steps, key=lambda s: s.week_number)
     topics = [s.topic for s in sorted_steps]
 
@@ -160,6 +205,7 @@ def _build_roadmap_out(roadmap, user_id: str) -> RoadmapOut:
 
     steps_out = []
     for step in roadmap.steps:
+        # Step-level progress object
         progress_obj = None
         for p in step.progress:
             if p.user_id == user_id:
@@ -170,6 +216,25 @@ def _build_roadmap_out(roadmap, user_id: str) -> RoadmapOut:
                 )
                 break
 
+        # Per-resource completion state
+        resources_out = []
+        for r in step.resources:
+            is_completed, completed_at = _get_resource_completion(r, user_id)
+            resources_out.append(
+                ResourceOut(
+                    id=r.id,
+                    title=r.title,
+                    url=r.url,
+                    resource_type=r.resource_type,
+                    source=r.source,
+                    completed=is_completed,
+                    completed_at=completed_at,
+                )
+            )
+
+        # Step-level resource stats
+        res_completed, res_total, res_pct = _build_step_resource_stats(step, user_id)
+
         steps_out.append(
             StepOut(
                 id=step.id,
@@ -177,17 +242,11 @@ def _build_roadmap_out(roadmap, user_id: str) -> RoadmapOut:
                 topic=step.topic,
                 description=step.description,
                 status=step.status,
-                resources=[
-                    ResourceOut(
-                        id=r.id,
-                        title=r.title,
-                        url=r.url,
-                        resource_type=r.resource_type,
-                        source=r.source,
-                    )
-                    for r in step.resources
-                ],
+                resources=resources_out,
                 progress=progress_obj,
+                resources_completed=res_completed,
+                total_resources=res_total,
+                resource_completion_pct=res_pct,
             )
         )
 
