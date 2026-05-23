@@ -7,6 +7,7 @@ Prefix: /api/organizations
 import asyncio
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -65,6 +66,7 @@ async def search_organizations(
             OrganizationMember.user_id == current_user.id,
             Organization.embedding.is_not(None),
         )
+        .options(selectinload(Organization.members))
         .order_by(Organization.embedding.cosine_distance(query_embedding))
         .limit(limit)
     )
