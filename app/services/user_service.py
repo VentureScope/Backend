@@ -4,6 +4,7 @@ Phase B Implementation.
 """
 
 import logging
+from datetime import datetime, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -333,8 +334,9 @@ class UserService:
         if user.cv_url:
             await self.s3_service.delete_cv(user.cv_url)
 
-        # Soft delete — set is_active to False
+        # Soft delete — set is_active to False and stamp deactivated_at
         user.is_active = False
+        user.deactivated_at = datetime.now(timezone.utc)
         await self.repo.update(user)
         return True
 
@@ -372,6 +374,13 @@ class UserService:
         for field, value in update_data.items():
             setattr(user, field, value)
 
+        # Keep deactivated_at in sync when is_active is toggled via admin patch
+        if "is_active" in update_data:
+            if not update_data["is_active"] and user.deactivated_at is None:
+                user.deactivated_at = datetime.now(timezone.utc)
+            elif update_data["is_active"]:
+                user.deactivated_at = None
+
         # Vectorize new data if needed
         if any(key in update_data for key in ['career_interest', 'github_username', 'estudent_profile', 'skills']):
             await self._queue_user_embedding(user)
@@ -394,8 +403,10 @@ class UserService:
                 await self.s3_service.delete_cv(user.cv_url)
             return await self.repo.delete(user)
         else:
-            # Soft delete
+            # Soft delete — stamp deactivated_at if not already set
             user.is_active = False
+            if user.deactivated_at is None:
+                user.deactivated_at = datetime.now(timezone.utc)
             await self.repo.update(user)
             return True
 
@@ -409,4 +420,5 @@ class UserService:
             raise ValueError("User is already active")
 
         user.is_active = True
+        user.deactivated_at = None  # clear the timestamp on reactivation
         return await self.repo.update(user)

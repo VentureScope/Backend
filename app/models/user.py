@@ -87,6 +87,11 @@ class User(Base):
         Boolean, default=False, nullable=False
     )  # True after OTP email verification (or OAuth signup)
 
+    # Set when the account is deactivated (is_active → False); NULL while active.
+    deactivated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+
     # MFA tracking columns
     mfa_enabled: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False
