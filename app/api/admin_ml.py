@@ -194,13 +194,36 @@ async def deploy_ml_run(
         logger.error("deploy_ml_run status update error: %s", exc)
         raise HTTPException(status_code=502, detail=str(exc))
 
+    # Check if the other model type is also deployed — warn if not
+    # (ensemble view only averages when both prophet + lstm are deployed)
+    other_model = "lstm" if model_type == "prophet" else "prophet"
+    try:
+        pool = await svc._get_pool_direct()
+        other_deployed = await pool.fetchval(
+            "SELECT COUNT(*) FROM ml_training_runs WHERE model_type = $1 AND status = 'deployed'",
+            other_model,
+        )
+    except Exception:
+        other_deployed = None
+
+    warning = None
+    if other_deployed is not None and other_deployed == 0:
+        warning = (
+            f"Only '{model_type}' is deployed. "
+            f"Deploy a '{other_model}' run too so the ensemble averages both models. "
+            f"Until then, /api/jobs/forecasts serves {model_type} predictions only."
+        )
+
     logger.info("Admin %s deployed run %s (model_type=%s)", admin_email, run_id, model_type)
-    return {
+    response = {
         "message": "Model deployed successfully",
         "run_id": run_id,
         "deployed_by": admin_email,
         "deployed_at": now_iso,
     }
+    if warning:
+        response["warning"] = warning
+    return response
 
 
 # ---------------------------------------------------------------------------

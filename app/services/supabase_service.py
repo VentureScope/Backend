@@ -81,6 +81,10 @@ class SupabaseService:
     that routers can serialize them directly with FastAPI.
     """
 
+    async def _get_pool_direct(self):
+        """Expose pool directly for ad-hoc queries in endpoints."""
+        return await _get_pool()
+
     # ------------------------------------------------------------------
     # ML pipeline
     # ------------------------------------------------------------------
