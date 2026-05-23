@@ -14,9 +14,17 @@ from collections import Counter
 from app.celery_config import celery_app
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, selectinload
-from app.models.organization import Organization, OrganizationMember
+from app.models.organization import Organization, OrganizationMember, OrganizationInvite, OrganizationRoadmap
 from app.models.user import User
 from app.core.config import settings
+
+# These imports are required so SQLAlchemy can resolve all relationship
+# strings (e.g. "LearningRoadmap") when the mapper configures itself
+# inside the Celery worker process.
+from app.models.roadmap import LearningRoadmap, LearningRoadmapStep, LearningRoadmapStepResource, LearningRoadmapProgress
+from app.models.experience import Experience
+from app.models.oauth_account import OAuthAccount
+from app.models.github_sync_snapshot import GitHubSyncSnapshot
 
 logger = logging.getLogger(__name__)
 

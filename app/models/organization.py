@@ -64,6 +64,26 @@ class Organization(Base):
     github_orgs: Mapped[list | None] = mapped_column(JSON, nullable=True)
     github_repos: Mapped[list | None] = mapped_column(JSON, nullable=True)
 
+    # Extended social
+    twitter_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+    # Technology & products
+    tech_stacks: Mapped[list | None] = mapped_column(JSON, nullable=True)   # ["React", "K8s", ...]
+    products: Mapped[list | None] = mapped_column(JSON, nullable=True)       # [{name, type, url, repos[]}]
+
+    # Additional company info
+    headquarters: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    founded_year: Mapped[int | None] = mapped_column(nullable=True)
+    company_size: Mapped[str | None] = mapped_column(String(50), nullable=True)  # e.g. "1-10", "11-50"
+
+    # Contact & mission
+    contact_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    contact_phone: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    mission_statement: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Custom metadata fields [{id, label, value}]
+    custom_fields: Mapped[list | None] = mapped_column(JSON, nullable=True)
+
     # Semantic embedding for org discovery and advisor RAG context
     embedding: Mapped[list[float] | None] = mapped_column(
         Vector(settings.EMBEDDING_DIMENSIONS), nullable=True
@@ -120,8 +140,10 @@ class OrganizationMember(Base):
         String(36), ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False, index=True,
     )
-    # "owner" | "member"
+    # org access role: "owner" | "admin" | "member"
     role: Mapped[str] = mapped_column(String(20), default="member", nullable=False)
+    # job/team title set at invite time (e.g. "Frontend Engineer")
+    job_title: Mapped[str | None] = mapped_column(String(255), nullable=True)
     joined_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
@@ -166,10 +188,12 @@ class OrganizationInvite(Base):
         nullable=False,
     )
     email: Mapped[str] = mapped_column(String(255), nullable=False)
+    # free-text job/team title set by inviter (e.g. "Frontend Engineer")
+    team_role: Mapped[str | None] = mapped_column(String(255), nullable=True)
     token: Mapped[str] = mapped_column(
         String(64), nullable=False, unique=True, default=_default_token
     )
-    # "pending" | "accepted" | "expired" | "cancelled"
+    # "pending" | "accepted" | "expired" | "cancelled" | "declined"
     status: Mapped[str] = mapped_column(
         String(20), default="pending", nullable=False
     )

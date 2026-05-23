@@ -210,6 +210,7 @@ class Settings(BaseSettings):
     S3_BUCKET_NAME: str = "venturescope-cvs"
     S3_ENDPOINT_URL: str = ""
     S3_PROFILE_PICTURE_BUCKET: str = "photo"
+    S3_ORG_BUCKET: str = "organization"
 
     # Upstash Redis – HTTP client (used by OTP service, rate limiting)
     UPSTASH_REDIS_URL: str = ""

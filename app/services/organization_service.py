@@ -45,10 +45,20 @@ class OrganizationService:
             "description": data.description,
             "industry": data.industry,
             "core_services": data.core_services,
+            "tech_stacks": data.tech_stacks,
             "website_url": data.website_url,
             "linkedin_url": data.linkedin_url,
+            "twitter_url": data.twitter_url,
             "github_orgs": [g.model_dump() for g in data.github_orgs] if data.github_orgs else None,
             "github_repos": [r.model_dump() for r in data.github_repos] if data.github_repos else None,
+            "headquarters": data.headquarters,
+            "founded_year": data.founded_year,
+            "company_size": data.company_size,
+            "contact_email": data.contact_email,
+            "contact_phone": data.contact_phone,
+            "mission_statement": data.mission_statement,
+            "products": [p.model_dump() for p in data.products] if data.products else None,
+            "custom_fields": [f.model_dump() for f in data.custom_fields] if data.custom_fields else None,
         })
 
         # Add creator as owner member
@@ -111,16 +121,12 @@ class OrganizationService:
         update_data = data.model_dump(exclude_unset=True)
 
         # Serialize nested objects
-        if "github_orgs" in update_data and update_data["github_orgs"]:
-            update_data["github_orgs"] = [
-                g.model_dump() if hasattr(g, "model_dump") else g
-                for g in update_data["github_orgs"]
-            ]
-        if "github_repos" in update_data and update_data["github_repos"]:
-            update_data["github_repos"] = [
-                r.model_dump() if hasattr(r, "model_dump") else r
-                for r in update_data["github_repos"]
-            ]
+        for field in ("github_orgs", "github_repos", "products", "custom_fields"):
+            if field in update_data and update_data[field]:
+                update_data[field] = [
+                    item.model_dump() if hasattr(item, "model_dump") else item
+                    for item in update_data[field]
+                ]
 
         org = await self.repo.update(org, update_data)
         await self.db.commit()
@@ -148,7 +154,7 @@ class OrganizationService:
             try:
                 from app.services.s3_service import get_s3_service
                 s3 = get_s3_service()
-                await s3.delete_file(org.logo_url)
+                await s3.delete_org_logo(org.logo_url)
             except Exception as e:
                 logger.warning("Failed to delete org logo from S3: %s", e)
 
@@ -177,15 +183,15 @@ class OrganizationService:
         from app.services.s3_service import get_s3_service
         s3 = get_s3_service()
 
-        # Delete old logo
+        # Delete old logo from organization bucket
         if org.logo_url:
             try:
-                await s3.delete_file(org.logo_url)
+                await s3.delete_org_logo(org.logo_url)
             except Exception:
                 pass
 
-        logo_url = await s3.upload_profile_picture(
-            user_id=f"org_{org_id}",
+        logo_url = await s3.upload_org_logo(
+            org_id=org_id,
             file_content=file_content,
             filename=filename,
             content_type=content_type,
@@ -207,7 +213,7 @@ class OrganizationService:
             try:
                 from app.services.s3_service import get_s3_service
                 s3 = get_s3_service()
-                await s3.delete_file(org.logo_url)
+                await s3.delete_org_logo(org.logo_url)
             except Exception as e:
                 logger.warning("Failed to delete org logo: %s", e)
 
@@ -246,8 +252,13 @@ class OrganizationService:
                 "email": m.user.email,
                 "profile_picture_url": m.user.profile_picture_url,
                 "role": m.role,
+                "job_title": getattr(m, "job_title", None),
                 "skills": m.user.skills,
                 "career_interest": m.user.career_interest,
+                "github_username": m.user.github_username,
+                # roadmaps counts filled in by caller if needed; default 0 here
+                "roadmaps_enrolled": 0,
+                "roadmaps_created": 0,
                 "joined_at": m.joined_at,
             }
             for m in members
@@ -263,10 +274,20 @@ class OrganizationService:
             "description": org.description,
             "industry": org.industry,
             "core_services": org.core_services,
+            "tech_stacks": getattr(org, "tech_stacks", None),
             "website_url": org.website_url,
             "linkedin_url": org.linkedin_url,
+            "twitter_url": getattr(org, "twitter_url", None),
             "github_orgs": org.github_orgs,
             "github_repos": org.github_repos,
+            "headquarters": getattr(org, "headquarters", None),
+            "founded_year": getattr(org, "founded_year", None),
+            "company_size": getattr(org, "company_size", None),
+            "contact_email": getattr(org, "contact_email", None),
+            "contact_phone": getattr(org, "contact_phone", None),
+            "mission_statement": getattr(org, "mission_statement", None),
+            "products": getattr(org, "products", None),
+            "custom_fields": getattr(org, "custom_fields", None),
             "created_at": org.created_at,
             "updated_at": org.updated_at,
             "my_role": my_role,

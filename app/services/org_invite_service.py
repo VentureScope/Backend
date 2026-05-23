@@ -1,5 +1,5 @@
 """
-Organization invitation service — send, accept, cancel invites.
+Organization invitation service — send, accept, decline, cancel, resend, preview.
 """
 
 import logging
@@ -32,7 +32,13 @@ class OrgInviteService:
         self.repo = OrganizationRepository(db)
         self.user_repo = UserRepository(db)
 
-    async def send_invite(self, org_id: str, owner_id: str, email: str) -> dict:
+    # ------------------------------------------------------------------
+    # Send invite
+    # ------------------------------------------------------------------
+
+    async def send_invite(
+        self, org_id: str, owner_id: str, email: str, team_role: str | None = None
+    ) -> dict:
         if not await self.repo.is_owner(org_id, owner_id):
             raise HTTPException(status_code=403, detail="Only the organization owner can send invites.")
 
@@ -63,45 +69,50 @@ class OrgInviteService:
             "organization_id": org_id,
             "invited_by": owner_id,
             "email": email,
+            "team_role": team_role,
         })
 
         await self.db.commit()
 
         # Send email
-        invite_url = f"{settings.FRONTEND_URL}/organizations/invite/accept?token={invite.token}"
-        try:
-            from app.services.email_service import get_email_provider
-            provider = get_email_provider()
-            html_body = _render_template("org_invite.html", {
-                "inviter_name": inviter_name,
-                "org_name": org.display_name,
-                "invite_url": invite_url,
-                "expire_hours": "48",
-            })
-            text_body = _render_template("org_invite.txt", {
-                "inviter_name": inviter_name,
-                "org_name": org.display_name,
-                "invite_url": invite_url,
-                "expire_hours": "48",
-            })
-            await provider.send_email(
-                to=email,
-                subject=f"You've been invited to join {org.display_name} on VentureScope",
-                html=html_body,
-                text=text_body,
-            )
-        except Exception as e:
-            logger.warning("Failed to send invite email to %s: %s", email, e)
-            # Don't fail the request — invite is created, email may retry
+        await self._dispatch_invite_email(invite, org, inviter_name)
 
         return {
             "id": invite.id,
             "organization_id": invite.organization_id,
             "email": invite.email,
+            "team_role": invite.team_role,
             "status": invite.status,
             "expires_at": invite.expires_at,
             "created_at": invite.created_at,
         }
+
+    async def _dispatch_invite_email(self, invite, org, inviter_name: str) -> None:
+        invite_url = f"{settings.FRONTEND_URL}/organizations/invites/accept?token={invite.token}"
+        try:
+            from app.services.email_service import get_email_provider
+            provider = get_email_provider()
+            context = {
+                "inviter_name": inviter_name,
+                "org_name": org.display_name,
+                "invite_url": invite_url,
+                "expire_hours": "48",
+                "team_role": invite.team_role or "",
+            }
+            html_body = _render_template("org_invite.html", context)
+            text_body = _render_template("org_invite.txt", context)
+            await provider.send_email(
+                to=invite.email,
+                subject=f"You've been invited to join {org.display_name} on VentureScope",
+                html=html_body,
+                text=text_body,
+            )
+        except Exception as e:
+            logger.warning("Failed to send invite email to %s: %s", invite.email, e)
+
+    # ------------------------------------------------------------------
+    # Accept invite
+    # ------------------------------------------------------------------
 
     async def accept_invite(self, token: str, user_id: str) -> dict:
         invite = await self.repo.get_invite_by_token(token)
@@ -114,7 +125,6 @@ class OrgInviteService:
                 detail="This invite has expired or has already been used.",
             )
 
-        # Verify the accepting user's email matches the invite
         user = await self.user_repo.get_by_id(user_id)
         if not user:
             raise HTTPException(status_code=404, detail="User not found.")
@@ -125,29 +135,68 @@ class OrgInviteService:
                 detail="This invite was sent to a different email address.",
             )
 
-        # Check not already a member
         if await self.repo.is_member(invite.organization_id, user_id):
             await self.repo.update_invite_status(invite, "accepted")
             await self.db.commit()
-            raise HTTPException(
-                status_code=409,
-                detail="You are already a member of this organization.",
-            )
+            raise HTTPException(status_code=409, detail="You are already a member of this organization.")
 
-        # Add member
-        await self.repo.add_member(invite.organization_id, user_id, role="member")
-        await self.repo.update_invite_status(invite, "accepted")
+        # Capture org info before commit (avoids expired object access after commit)
+        org_id = invite.organization_id
+        org_name = invite.organization.display_name
+        team_role = invite.team_role
+
+        # Add member — carry over team_role as job_title
+        member = await self.repo.add_member(org_id, user_id, role="member")
+        if team_role and hasattr(member, "job_title"):
+            member.job_title = team_role
+
+        # Update invite status to accepted
+        invite.status = "accepted"
+        await self.db.flush()
         await self.db.commit()
 
+        # Verify the status was actually persisted
+        await self.db.refresh(invite)
+        if invite.status != "accepted":
+            logger.error("Invite status failed to update for invite %s", invite.id)
+
         # Re-embed org — new member's skills now part of the aggregate
-        from app.tasks.org_embedding_task import generate_org_embedding
-        generate_org_embedding.delay(invite.organization_id)
+        try:
+            from app.tasks.org_embedding_task import generate_org_embedding
+            generate_org_embedding.delay(org_id)
+        except Exception as e:
+            logger.warning("Failed to dispatch org embedding task: %s", e)
 
         return {
-            "message": f"Successfully joined {invite.organization.display_name}.",
-            "organization_id": invite.organization_id,
-            "organization_name": invite.organization.display_name,
+            "message": f"Successfully joined {org_name}.",
+            "organization_id": org_id,
+            "organization_name": org_name,
+            "team_role": team_role,
         }
+
+    # ------------------------------------------------------------------
+    # Decline invite (N3)
+    # ------------------------------------------------------------------
+
+    async def decline_invite(self, token: str, user_id: str) -> dict:
+        invite = await self.repo.get_invite_by_token(token)
+        if not invite:
+            raise HTTPException(status_code=404, detail="Invite not found.")
+
+        if not invite.is_valid():
+            raise HTTPException(status_code=410, detail="This invite has already expired or been used.")
+
+        user = await self.user_repo.get_by_id(user_id)
+        if not user or user.email.lower() != invite.email.lower():
+            raise HTTPException(status_code=403, detail="This invite was sent to a different email address.")
+
+        await self.repo.update_invite_status(invite, "declined")
+        await self.db.commit()
+        return {"message": "Invitation declined."}
+
+    # ------------------------------------------------------------------
+    # Cancel invite (owner action)
+    # ------------------------------------------------------------------
 
     async def cancel_invite(self, org_id: str, owner_id: str, invite_id: str) -> None:
         if not await self.repo.is_owner(org_id, owner_id):
@@ -158,13 +207,101 @@ class OrgInviteService:
             raise HTTPException(status_code=404, detail="Invite not found.")
 
         if invite.status != "pending":
-            raise HTTPException(
-                status_code=400,
-                detail=f"Cannot cancel an invite with status '{invite.status}'.",
-            )
+            raise HTTPException(status_code=400, detail=f"Cannot cancel an invite with status '{invite.status}'.")
 
         await self.repo.update_invite_status(invite, "cancelled")
         await self.db.commit()
+
+    # ------------------------------------------------------------------
+    # Resend invite (N4)
+    # ------------------------------------------------------------------
+
+    async def resend_invite(self, org_id: str, owner_id: str, invite_id: str) -> dict:
+        if not await self.repo.is_owner(org_id, owner_id):
+            raise HTTPException(status_code=403, detail="Only the organization owner can resend invites.")
+
+        invite = await self.repo.get_invite_by_id(invite_id, org_id)
+        if not invite:
+            raise HTTPException(status_code=404, detail="Invite not found.")
+
+        if invite.status != "pending":
+            raise HTTPException(status_code=400, detail=f"Can only resend pending invites. Current status: '{invite.status}'.")
+
+        org = await self.repo.get_by_id(org_id)
+        inviter = await self.user_repo.get_by_id(owner_id)
+        inviter_name = (inviter.full_name or inviter.email) if inviter else "Someone"
+
+        await self._dispatch_invite_email(invite, org, inviter_name)
+        return {
+            "id": invite.id,
+            "email": invite.email,
+            "team_role": invite.team_role,
+            "message": f"Invite resent to {invite.email}.",
+        }
+
+    # ------------------------------------------------------------------
+    # Preview invite — before accepting (N2)
+    # ------------------------------------------------------------------
+
+    async def preview_invite(self, token: str) -> dict:
+        """
+        Return org details for an invite token — used on the accept page
+        to show a preview before the user confirms joining.
+        No auth required; sensitive info is not leaked (token itself is the secret).
+        """
+        invite = await self.repo.get_invite_by_token(token)
+        if not invite:
+            raise HTTPException(status_code=404, detail="Invite not found.")
+
+        inviter = await self.user_repo.get_by_id(invite.invited_by)
+        inviter_name = (inviter.full_name or inviter.email) if inviter else None
+        org = invite.organization
+
+        return {
+            "id": invite.id,
+            "organization_id": invite.organization_id,
+            "organization_name": org.display_name,
+            "organization_logo": org.logo_url,
+            "organization_industry": org.industry,
+            "organization_description": org.description,
+            "team_role": invite.team_role,
+            "inviter_name": inviter_name,
+            "expires_at": invite.expires_at,
+            "is_valid": invite.is_valid(),
+        }
+
+    # ------------------------------------------------------------------
+    # Get user's pending invites (N1)
+    # ------------------------------------------------------------------
+
+    async def get_my_invites(self, user_id: str) -> list[dict]:
+        user = await self.user_repo.get_by_id(user_id)
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found.")
+
+        invites = await self.repo.get_invites_by_email(user.email)
+
+        result = []
+        for i in invites:
+            inviter = await self.user_repo.get_by_id(i.invited_by) if i.invited_by else None
+            inviter_name = (inviter.full_name or inviter.email) if inviter else None
+            result.append({
+                "id": i.id,
+                "organization_id": i.organization_id,
+                "organization_name": i.organization.display_name,
+                "organization_logo": i.organization.logo_url,
+                "organization_industry": i.organization.industry,
+                "team_role": i.team_role,
+                "inviter_name": inviter_name,
+                "token": i.token,
+                "expires_at": i.expires_at,
+                "created_at": i.created_at,
+            })
+        return result
+
+    # ------------------------------------------------------------------
+    # List invites (owner view)
+    # ------------------------------------------------------------------
 
     async def list_invites(self, org_id: str, owner_id: str) -> list[dict]:
         if not await self.repo.is_owner(org_id, owner_id):
@@ -176,6 +313,7 @@ class OrgInviteService:
                 "id": i.id,
                 "organization_id": i.organization_id,
                 "email": i.email,
+                "team_role": i.team_role,
                 "status": i.status,
                 "expires_at": i.expires_at,
                 "created_at": i.created_at,

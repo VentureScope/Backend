@@ -32,7 +32,7 @@ from app.models.transcript_config import TranscriptConfig
 from app.models.github_sync_snapshot import GitHubSyncSnapshot
 from app.models.experience import Experience
 from app.models.job import Job
-from app.models.roadmap import LearningRoadmap, LearningRoadmapStep, LearningRoadmapStepResource, LearningRoadmapProgress
+from app.models.roadmap import LearningRoadmap, LearningRoadmapStep, LearningRoadmapStepResource, LearningRoadmapProgress, LearningRoadmapResourceProgress
 from app.models.resume import Resume
 from app.models.organization import Organization, OrganizationMember, OrganizationInvite, OrganizationRoadmap
 from app.models.org_chat import OrgChatSession, OrgChatMessage

@@ -20,6 +20,9 @@ class ResourceOut(BaseModel):
     url: str | None = None
     resource_type: str | None = None
     source: str | None = None
+    # Resource-level completion state (per user)
+    completed: bool = False
+    completed_at: datetime | None = None
 
     model_config = {"from_attributes": True}
 
@@ -40,6 +43,10 @@ class StepOut(BaseModel):
     status: str
     resources: list[ResourceOut] = []
     progress: StepProgressOut | None = None
+    # Step-level resource completion stats
+    resources_completed: int = 0
+    total_resources: int = 0
+    resource_completion_pct: float = 0.0
 
     model_config = {"from_attributes": True}
 
@@ -100,15 +107,19 @@ class StepProgressUpdate(BaseModel):
     notes: str | None = None
 
 
+class ResourceToggleRequest(BaseModel):
+    """Body for POST /api/roadmaps/resources/{resource_id}/toggle"""
+    completed: bool
+
+
 # ---------------------------------------------------------------------------
-# Progress update response
+# Response schemas
 # ---------------------------------------------------------------------------
 
 class StepProgressUpdateOut(BaseModel):
     """
-    Returned after PATCH /api/roadmaps/steps/{step_id}/progress.
-    Includes updated step state AND the roadmap-level stats so the
-    frontend can update the progress bar in a single call.
+    Returned after PATCH /api/roadmaps/steps/{step_id}/progress (manual override).
+    Includes updated step state AND roadmap-level stats.
     """
     step_id: str
     status: str
@@ -119,3 +130,25 @@ class StepProgressUpdateOut(BaseModel):
     steps_completed: int
     total_steps: int
     completion_percentage: float
+
+
+class ResourceToggleOut(BaseModel):
+    """
+    Returned after POST /api/roadmaps/resources/{resource_id}/toggle.
+    Contains everything the frontend needs to update all progress bars
+    in a single response — no additional calls required.
+    """
+    resource_id: str
+    completed: bool
+    completed_at: datetime | None = None
+    # Step-level stats (auto-derived from resource completion)
+    step_id: str
+    step_status: str                  # not_started | in_progress | completed
+    resources_completed: int
+    total_resources: int
+    resource_completion_pct: float    # step-level %
+    # Roadmap-level stats (auto-derived from step completion)
+    roadmap_status: str
+    steps_completed: int
+    total_steps: int
+    completion_percentage: float      # roadmap-level %

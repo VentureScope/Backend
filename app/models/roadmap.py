@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
-from sqlalchemy import String, DateTime, Text, Integer, ForeignKey, UniqueConstraint
+from sqlalchemy import String, DateTime, Text, Integer, ForeignKey, UniqueConstraint, Boolean, Index
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 import uuid
 
@@ -81,6 +81,58 @@ class LearningRoadmapStepResource(Base):
     step: Mapped["LearningRoadmapStep"] = relationship(
         "LearningRoadmapStep", back_populates="resources"
     )
+    resource_progress: Mapped[list["LearningRoadmapResourceProgress"]] = relationship(
+        "LearningRoadmapResourceProgress",
+        back_populates="resource",
+        cascade="all, delete-orphan",
+    )
+
+
+class LearningRoadmapResourceProgress(Base):
+    """
+    Tracks whether a specific user has completed a specific resource.
+    One row per (user, resource). step_id is denormalized for fast
+    per-step counting without an extra JOIN.
+    """
+    __tablename__ = "learning_roadmap_resource_progress"
+    __table_args__ = (
+        UniqueConstraint("user_id", "resource_id", name="uq_user_resource_progress"),
+        Index("ix_resource_progress_user_step", "user_id", "step_id"),
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    resource_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("learning_roadmap_step_resources.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    # Denormalized for fast step-level counting
+    step_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("learning_roadmap_steps.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    completed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    resource: Mapped["LearningRoadmapStepResource"] = relationship(
+        "LearningRoadmapStepResource", back_populates="resource_progress"
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<LearningRoadmapResourceProgress("
+            f"user={self.user_id}, resource={self.resource_id}, "
+            f"completed={self.completed})>"
+        )
 
 
 class LearningRoadmapProgress(Base):

@@ -2,7 +2,7 @@
 Repository for all Organization-related database operations.
 """
 
-from sqlalchemy import select, delete
+from sqlalchemy import select, delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -176,6 +176,27 @@ class OrganizationRepository:
         invite.status = status
         await self.db.flush()
 
+    async def get_invites_by_email(self, email: str) -> list[OrganizationInvite]:
+        """
+        Return all pending, non-expired invites sent to a specific email address.
+        Eagerly loads the organization so name/logo/industry are available without
+        extra queries.
+        """
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+
+        result = await self.db.execute(
+            select(OrganizationInvite)
+            .where(
+                func.lower(OrganizationInvite.email) == email.strip().lower(),
+                OrganizationInvite.status == "pending",
+                OrganizationInvite.expires_at > now,
+            )
+            .options(selectinload(OrganizationInvite.organization))
+            .order_by(OrganizationInvite.created_at.desc())
+        )
+        return list(result.scalars().all())
+
     # ------------------------------------------------------------------
     # Org Roadmaps
     # ------------------------------------------------------------------
@@ -198,6 +219,9 @@ class OrganizationRepository:
                 selectinload(OrganizationRoadmap.roadmap)
                 .selectinload(LearningRoadmap.steps)
                 .selectinload(LearningRoadmapStep.progress),
+                selectinload(OrganizationRoadmap.roadmap)
+                .selectinload(LearningRoadmap.steps)
+                .selectinload(LearningRoadmapStep.resources),
             )
             .order_by(OrganizationRoadmap.created_at.desc())
         )
@@ -214,6 +238,9 @@ class OrganizationRepository:
                 selectinload(OrganizationRoadmap.roadmap)
                 .selectinload(LearningRoadmap.steps)
                 .selectinload(LearningRoadmapStep.progress),
+                selectinload(OrganizationRoadmap.roadmap)
+                .selectinload(LearningRoadmap.steps)
+                .selectinload(LearningRoadmapStep.resources),
             )
         )
         return result.scalar_one_or_none()

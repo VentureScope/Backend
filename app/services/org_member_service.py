@@ -53,6 +53,31 @@ class OrgMemberService:
         from app.tasks.org_embedding_task import generate_org_embedding
         generate_org_embedding.delay(org_id)
 
+    async def update_member_role(
+        self, org_id: str, owner_id: str, target_user_id: str, new_role: str
+    ) -> dict:
+        """Change a member's org access role (admin | member). Owner only; cannot change owner role."""
+        if not await self.repo.is_owner(org_id, owner_id):
+            raise HTTPException(status_code=403, detail="Only the organization owner can change member roles.")
+
+        if target_user_id == owner_id:
+            raise HTTPException(status_code=400, detail="Cannot change the owner's role.")
+
+        member = await self.repo.get_member(org_id, target_user_id)
+        if not member:
+            raise HTTPException(status_code=404, detail="Member not found in this organization.")
+
+        if member.role == "owner":
+            raise HTTPException(status_code=400, detail="Cannot change the owner's role.")
+
+        member.role = new_role
+        await self.db.commit()
+        return {
+            "user_id": target_user_id,
+            "role": new_role,
+            "message": f"Member role updated to '{new_role}'.",
+        }
+
     async def leave_organization(self, org_id: str, user_id: str) -> None:
         member = await self.repo.get_member(org_id, user_id)
         if not member:
