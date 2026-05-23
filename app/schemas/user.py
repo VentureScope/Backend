@@ -19,7 +19,7 @@ class UserCreate(BaseModel):
     github_username: str | None = None
     career_interest: str | None = None
     skills: list[str] | None = None
-    role: RoleType = "professional"
+    role: RoleType = Field(..., description="Account type: 'student' or 'professional'")
 
     @field_validator("password")
     @classmethod

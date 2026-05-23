@@ -28,6 +28,10 @@ class AuthService:
         if existing:
             raise ValueError("Email already registered")
 
+        # First user on the platform becomes admin automatically
+        total_users = await self.repo.count(include_inactive=True)
+        is_first_user = total_users == 0
+
         user = User(
             email=data.email,
             password_hash=hash_password(data.password),
@@ -38,10 +42,14 @@ class AuthService:
             role=data.role,
             embedding_status="pending",
             is_verified=False,  # Requires OTP verification before first login
+            is_admin=is_first_user,
         )
         user = await self.repo.create(user)
         await self.db.commit()
         await self.db.refresh(user)
+
+        if is_first_user:
+            logger.info("First user registered — auto-promoted to admin: %s", user.email)
 
         generate_user_profile_embedding.delay(user.id)
 

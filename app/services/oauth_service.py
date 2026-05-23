@@ -725,7 +725,12 @@ query ($username: String!) {{
             extra_kwargs = {}
             if provider == "github" and user_info.get("provider_login"):
                 extra_kwargs["github_username"] = user_info["provider_login"]
-            
+
+            # First user on the platform becomes admin automatically
+            total_users = await self.user_repo.count(include_inactive=True)
+            if total_users == 0:
+                extra_kwargs["is_admin"] = True
+
             # Create new user
             user = await self.user_repo.create_oauth_user(
                 email=email,
