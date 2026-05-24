@@ -28,6 +28,10 @@ class AuthService:
         if existing:
             raise ValueError("Email already registered")
 
+        # First user on the platform becomes admin automatically
+        total_users = await self.repo.count(include_inactive=True)
+        is_first_user = total_users == 0
+
         user = User(
             email=data.email,
             password_hash=hash_password(data.password),
@@ -38,10 +42,14 @@ class AuthService:
             role=data.role,
             embedding_status="pending",
             is_verified=False,  # Requires OTP verification before first login
+            is_admin=is_first_user,
         )
         user = await self.repo.create(user)
         await self.db.commit()
         await self.db.refresh(user)
+
+        if is_first_user:
+            logger.info("First user registered — auto-promoted to admin: %s", user.email)
 
         generate_user_profile_embedding.delay(user.id)
 
@@ -59,11 +67,19 @@ class AuthService:
     async def login(self, data: UserLogin) -> str:
         user = await self.repo.get_by_email(data.email)
 
-        # Check if user exists and is active
-        if not user or not user.is_active:
-            # Use dummy hash for timing consistency even when user doesn't exist
+        # Unknown user — use dummy hash to prevent timing-based enumeration
+        if not user:
             verify_password(data.password, _DUMMY_HASH)
             raise ValueError("Invalid email or password")
+
+        # Deactivated account — distinguish from wrong-password so the user
+        # knows their account still exists and can contact support
+        if not user.is_active:
+            verify_password(data.password, _DUMMY_HASH)
+            raise PermissionError(
+                "This account has been deactivated. "
+                "Please contact support if you believe this is a mistake."
+            )
 
         # Check if this is an OAuth user trying to login with password
         if user.password_hash is None or user.oauth_provider is not None:

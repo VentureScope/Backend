@@ -15,6 +15,7 @@ process. Configure via SUPABASE_URL env var:
 
 import asyncio
 import logging
+from datetime import datetime
 from typing import Any
 
 import asyncpg
@@ -79,6 +80,10 @@ class SupabaseService:
     All methods are async and return plain dicts / lists of dicts so
     that routers can serialize them directly with FastAPI.
     """
+
+    async def _get_pool_direct(self):
+        """Expose pool directly for ad-hoc queries in endpoints."""
+        return await _get_pool()
 
     # ------------------------------------------------------------------
     # ML pipeline
@@ -149,7 +154,7 @@ class SupabaseService:
         run_id: str,
         *,
         status: str,
-        deployed_at: str | None = None,
+        deployed_at: datetime | None = None,
         deployed_by: str | None = None,
     ) -> None:
         """Update status (and optional deploy fields) on a training run."""
@@ -263,6 +268,44 @@ class SupabaseService:
             role_id,
         )
         return dict(row) if row else None
+
+    # ------------------------------------------------------------------
+    # Job forecasts (ensemble of Prophet + LSTM predictions)
+    # ------------------------------------------------------------------
+
+    async def get_job_forecasts(
+        self,
+        *,
+        normalized_title: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """
+        Return ensemble forecast rows (averaged across Prophet and LSTM).
+        Optionally filter by a specific normalized_title.
+        """
+        pool = await _get_pool()
+
+        if normalized_title:
+            rows = await pool.fetch(
+                """
+                SELECT normalized_title, forecast_date, predicted_count,
+                       lower_bound, upper_bound
+                FROM job_forecasts_ensemble
+                WHERE normalized_title = $1
+                ORDER BY forecast_date
+                """,
+                normalized_title,
+            )
+        else:
+            rows = await pool.fetch(
+                """
+                SELECT normalized_title, forecast_date, predicted_count,
+                       lower_bound, upper_bound
+                FROM job_forecasts_ensemble
+                ORDER BY normalized_title, forecast_date
+                """
+            )
+
+        return [dict(r) for r in rows]
 
     # ------------------------------------------------------------------
     # Overview / stats (used by frontend summary cards)

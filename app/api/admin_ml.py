@@ -176,14 +176,15 @@ async def deploy_ml_run(
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc))
 
-    now_iso = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
     admin_email = current_admin.email
 
     try:
         await svc.update_ml_training_run_status(
             run_id,
             status="deployed",
-            deployed_at=now_iso,
+            deployed_at=now,
             deployed_by=admin_email,
         )
         model_type = run.get("model_type", "")
@@ -193,13 +194,38 @@ async def deploy_ml_run(
         logger.error("deploy_ml_run status update error: %s", exc)
         raise HTTPException(status_code=502, detail=str(exc))
 
+    # Check if the other model type is also deployed — warn if not
+    # (ensemble view only averages when both prophet + lstm are deployed)
+    # Only meaningful for the two known ensemble model types.
+    warning = None
+    if model_type in ("prophet", "lstm"):
+        other_model = "lstm" if model_type == "prophet" else "prophet"
+        try:
+            pool = await svc._get_pool_direct()
+            other_deployed = await pool.fetchval(
+                "SELECT COUNT(*) FROM ml_training_runs WHERE model_type = $1 AND status = 'deployed'",
+                other_model,
+            )
+        except Exception:
+            other_deployed = None
+
+        if other_deployed is not None and other_deployed == 0:
+            warning = (
+                f"Only '{model_type}' is deployed. "
+                f"Deploy a '{other_model}' run too so the ensemble averages both models. "
+                f"Until then, /api/jobs/forecasts serves {model_type} predictions only."
+            )
+
     logger.info("Admin %s deployed run %s (model_type=%s)", admin_email, run_id, model_type)
-    return {
+    response = {
         "message": "Model deployed successfully",
         "run_id": run_id,
         "deployed_by": admin_email,
         "deployed_at": now_iso,
     }
+    if warning:
+        response["warning"] = warning
+    return response
 
 
 # ---------------------------------------------------------------------------

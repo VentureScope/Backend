@@ -27,6 +27,16 @@ class JobStats(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class JobForecast(BaseModel):
+    normalized_title: str
+    forecast_date: str
+    predicted_count: float
+    lower_bound: float | None = None
+    upper_bound: float | None = None
+
+    model_config = {"from_attributes": True}
+
+
 class JobMatch(BaseModel):
     id: str
     job_title: str

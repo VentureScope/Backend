@@ -19,7 +19,7 @@ class UserCreate(BaseModel):
     github_username: str | None = None
     career_interest: str | None = None
     skills: list[str] | None = None
-    role: RoleType = "professional"
+    role: RoleType = Field(..., description="Account type: 'student' or 'professional'")
 
     @field_validator("password")
     @classmethod
@@ -57,6 +57,7 @@ class UserResponse(BaseModel):
     oauth_provider: str | None = None
     mfa_enabled: bool = False
     mfa_enrolled_at: datetime | None = None
+    deactivated_at: datetime | None = None
     has_password: bool = False
     # Internal field to help populate has_password from ORM
     password_hash: str | None = Field(None, exclude=True)

@@ -128,19 +128,19 @@ async def delete_current_user_account(
     data: DeleteAccountRequest = Body(...),
 ):
     """
-    Delete current user's account (soft delete).
+    Deactivate the current user's account (soft delete).
 
-    Requires password verification for security.
-    The account will be deactivated, not permanently deleted.
-    Contact support to reactivate or permanently delete your data.
+    Requires password confirmation for email/password accounts.
+    The account is deactivated immediately — all authenticated requests
+    will be rejected. Contact support to reactivate your account.
     """
     service = UserService(db)
     try:
         await service.delete_account(current_user.id, data.password)
         await db.commit()
         return MessageResponse(
-            message="Account deleted successfully",
-            detail="Your account has been deactivated. Contact support to restore.",
+            message="Account deactivated successfully",
+            detail="Your account has been deactivated. Contact support to reactivate your account.",
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

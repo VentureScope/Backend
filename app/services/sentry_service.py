@@ -68,14 +68,15 @@ class SentryService:
 
     def __init__(self) -> None:
         self._org = settings.SENTRY_ORG_SLUG
-        self._project = settings.SENTRY_PROJECT_SLUG
+        self._project_slug = settings.SENTRY_PROJECT_SLUG  # used for deep-links only
+        self._project_id = settings.SENTRY_PROJECT_ID      # numeric ID required by API filters
         self._token = settings.SENTRY_AUTH_TOKEN
 
     def _require_config(self) -> None:
-        if not self._token or not self._org or not self._project:
+        if not self._token or not self._org or not self._project_id:
             raise SentryServiceError(
                 "Sentry is not configured. "
-                "Set SENTRY_AUTH_TOKEN, SENTRY_ORG_SLUG, SENTRY_PROJECT_SLUG.",
+                "Set SENTRY_AUTH_TOKEN, SENTRY_ORG_SLUG, SENTRY_PROJECT_ID.",
                 status_code=503,
             )
 
@@ -111,12 +112,13 @@ class SentryService:
 
     async def _fetch_summary(self) -> dict[str, Any]:
         async with self._client() as client:
-            # Fire all 4 Sentry API calls concurrently
+            # Fire all 4 Sentry API calls concurrently.
+            # project param must be the numeric project ID, not the slug.
             issues_resp, stats_resp, perf_resp, prior_resp = await asyncio.gather(
                 client.get(
                     f"/organizations/{self._org}/issues/",
                     params={
-                        "project": self._project,
+                        "project": self._project_id,
                         "query": "is:unresolved",
                         "statsPeriod": "24h",
                         "limit": 5,
@@ -126,20 +128,20 @@ class SentryService:
                 client.get(
                     f"/organizations/{self._org}/stats_v2/",
                     params={
-                        "project": self._project,
-                        "field": "count()",
+                        "project": self._project_id,
+                        "field": "sum(times_seen)",
                         "interval": "1d",
                         "statsPeriod": "7d",
+                        "groupBy": "outcome",
                         "category": "error",
-                        "outcome": "accepted",
                     },
                 ),
                 client.get(
                     f"/organizations/{self._org}/events/",
                     params={
-                        "project": self._project,
+                        "project": self._project_id,
                         "field": ["p95(transaction.duration)", "apdex()"],
-                        "query": "event.type:transaction server_name:backend-api",
+                        "query": "event.type:transaction",
                         "statsPeriod": "24h",
                         "per_page": 1,
                     },
@@ -147,12 +149,12 @@ class SentryService:
                 client.get(
                     f"/organizations/{self._org}/stats_v2/",
                     params={
-                        "project": self._project,
-                        "field": "count()",
+                        "project": self._project_id,
+                        "field": "sum(times_seen)",
                         "interval": "24h",
                         "statsPeriod": "48h",
+                        "groupBy": "outcome",
                         "category": "error",
-                        "outcome": "accepted",
                     },
                 ),
             )
@@ -160,7 +162,7 @@ class SentryService:
         # --- Parse issues ---
         if issues_resp.status_code != 200:
             raise SentryServiceError(
-                f"Sentry issues API error: {issues_resp.status_code}",
+                f"Sentry issues API error: {issues_resp.status_code} — {issues_resp.text[:300]}",
             )
         issues_data = issues_resp.json()
         top_issues = [
@@ -179,16 +181,21 @@ class SentryService:
         unresolved_24h = sum(int(i.get("count", 0)) for i in issues_data)
 
         # --- Parse 7-day sparkline ---
+        # stats_v2 returns groups per outcome; we want the "accepted" series.
         sparkline: list[dict] = []
         if stats_resp.status_code == 200:
             stats_data = stats_resp.json()
             intervals = stats_data.get("intervals", [])
             groups = stats_data.get("groups", [])
-            if groups:
-                totals = groups[0].get("totals", {}).get("count()", [])
+            accepted_group = next(
+                (g for g in groups if g.get("by", {}).get("outcome") == "accepted"),
+                groups[0] if groups else None,
+            )
+            if accepted_group:
+                series = accepted_group.get("series", {}).get("sum(times_seen)", [])
                 sparkline = [
-                    {"date": intervals[i], "count": totals[i]}
-                    for i in range(min(len(intervals), len(totals)))
+                    {"date": intervals[i], "count": series[i]}
+                    for i in range(min(len(intervals), len(series)))
                 ]
 
         # --- Parse performance ---
@@ -203,14 +210,21 @@ class SentryService:
                 apdex = row.get("apdex()")
 
         # --- Parse trend delta ---
+        # Compare accepted errors: last 24h vs prior 24h.
+        # stats_v2 with statsPeriod=48h&interval=24h returns 3 buckets (day-2, day-1, day-0).
+        # We use the last two accepted-outcome buckets for the delta.
         trend_delta: int | None = None
         if prior_resp.status_code == 200:
             prior_data = prior_resp.json()
             prior_groups = prior_data.get("groups", [])
-            if prior_groups:
-                prior_totals = prior_groups[0].get("totals", {}).get("count()", [])
-                if len(prior_totals) >= 2:
-                    trend_delta = int(prior_totals[-1]) - int(prior_totals[-2])
+            accepted_prior = next(
+                (g for g in prior_groups if g.get("by", {}).get("outcome") == "accepted"),
+                prior_groups[0] if prior_groups else None,
+            )
+            if accepted_prior:
+                prior_series = accepted_prior.get("series", {}).get("sum(times_seen)", [])
+                if len(prior_series) >= 2:
+                    trend_delta = int(prior_series[-1]) - int(prior_series[-2])
 
         return {
             "unresolved_24h": unresolved_24h,
@@ -221,7 +235,7 @@ class SentryService:
             "seven_day_sparkline": sparkline,
             "sentry_issues_url": (
                 f"https://sentry.io/organizations/{self._org}/issues/"
-                f"?project={self._project}"
+                f"?project={self._project_id}"
             ),
             "sentry_performance_url": (
                 f"https://sentry.io/organizations/{self._org}/performance/"

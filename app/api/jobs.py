@@ -8,9 +8,11 @@ from app.schemas.job import (
     InDemandSkill,
     JobStats,
     JobMatch,
+    JobForecast,
 )
 from app.models.user import User
 from app.api.deps import get_current_user
+from app.services.supabase_service import get_supabase_service
 
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
 
@@ -63,6 +65,17 @@ async def get_jobs_by_category(
         }
         for j in jobs
     ]
+
+
+@router.get("/forecasts", response_model=list[JobForecast])
+async def get_job_forecasts(
+    role: str | None = Query(None, description="Filter by normalized title (e.g. 'Software Engineer')"),
+):
+    """Return ensemble job demand forecasts (averaged across Prophet and LSTM models).
+    Each row predicts the number of job postings for a role in a future month.
+    """
+    svc = get_supabase_service()
+    return await svc.get_job_forecasts(normalized_title=role)
 
 
 @router.get("/match-profile", response_model=list[JobMatch])
