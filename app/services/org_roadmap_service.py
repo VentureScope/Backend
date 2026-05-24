@@ -60,6 +60,7 @@ class OrgRoadmapService:
         user_id: str,
         trend_name: str,
         goal: str | None,
+        use_market_trends: bool = False,
     ) -> dict:
         # Any org member can create team roadmaps (not just owner)
         if not await self.repo.is_member(org_id, user_id):
@@ -71,20 +72,55 @@ class OrgRoadmapService:
 
         # Generate via existing RoadmapService
         from app.services.roadmap_service import RoadmapService
+        from collections import Counter
         roadmap_svc = RoadmapService(self.db)
 
-        # Aggregate org member skills to pass as context
+        members = org.members or []
+
+        # --- Company profile context ---
+        org_profile = {
+            "name": org.display_name,
+            "industry": org.industry,
+            "description": org.description,
+            "core_services": org.core_services,
+            "tech_stacks": getattr(org, "tech_stacks", None),
+        }
+
+        # --- All team skills (for user_skills context) ---
         all_skills = list({
             skill
-            for m in (org.members or [])
+            for m in members
             for skill in (m.user.skills or [])
         })
+
+        # --- Role-based peer skills ---
+        # Find members whose career_interest matches the trend_name
+        # These are the "same role" peers — their skills calibrate the roadmap
+        role_peers = [
+            m for m in members
+            if m.user and m.user.career_interest
+            and trend_name.lower() in (m.user.career_interest or "").lower()
+        ]
+        if not role_peers:
+            # Fall back to all members if no exact role match
+            role_peers = members
+
+        role_skill_counter: Counter = Counter()
+        for m in role_peers:
+            for skill in (m.user.skills or []):
+                role_skill_counter[skill] += 1
+
+        # Top 15 most common skills among same-role peers
+        role_skills = [s for s, _ in role_skill_counter.most_common(15)]
 
         roadmap = await roadmap_svc.generate_and_save(
             user_id=user_id,
             trend_name=trend_name,
             goal=goal,
             user_skills=all_skills or None,
+            use_market_trends=use_market_trends,
+            org_profile=org_profile,
+            role_skills=role_skills or None,
         )
 
         # Link roadmap to org — record who created it

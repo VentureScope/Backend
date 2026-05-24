@@ -1,11 +1,11 @@
 import asyncio
 import json
+import logging
 from sqlalchemy.ext.asyncio import AsyncSession
 from langchain_core.messages import HumanMessage
 from langgraph.prebuilt import create_react_agent
 
 from typing import Any
-from collections.abc import Sequence
 
 from app.services.hosted_llm import HostedLLM
 from app.services.search_service import perform_web_search
@@ -14,16 +14,26 @@ from app.repositories.roadmap_repository import RoadmapRepository
 from app.repositories.job_repository import JobRepository
 from app.models.roadmap import LearningRoadmap
 
-ROADMAP_SYSTEM_PROMPT = """You are a career advisor. Generate a personalized learning roadmap.
+logger = logging.getLogger(__name__)
 
-You MUST use the provided web search tool to find real, working, up-to-date links for the resources (courses, articles, documentation, videos) you recommend. Do not invent or hallucinate URLs.
+# ---------------------------------------------------------------------------
+# System prompts — current vs future trend mode
+# ---------------------------------------------------------------------------
 
-Based on the user's current skills, the trending career they selected, and market demand data, create a structured week-by-week learning roadmap.
+_BASE_RULES = """
+Rules:
+- You MUST call the `perform_web_search` tool BEFORE generating the JSON to find working, real URLs.
+- Generates up to 8 weeks. Each week must have exactly 2 resources.
+- Return ONLY valid JSON, no markdown or explanation.
+- The skill_gap_summary must be 2-4 sentences that: (1) identify the key skills the user is missing
+  for the target role based on their current skills, (2) explain how the roadmap addresses those gaps,
+  and (3) highlight any strengths the user already has. Be specific — name the actual skills.
 
 The roadmap must be valid JSON with this exact structure:
 {
   "title": "string - roadmap title",
-  "total_weeks": 12,
+  "total_weeks": 8,
+  "skill_gap_summary": "string - 2-4 sentence personalized skill gap analysis",
   "steps": [
     {
       "week_number": 1,
@@ -32,19 +42,32 @@ The roadmap must be valid JSON with this exact structure:
       "resources": [
         {
           "title": "string - resource name",
-          "url": "string - URL if known, or empty string",
+          "url": "string - real URL found via web search",
           "resource_type": "course|article|video|documentation|project",
           "source": "llm_generated"
         }
       ]
     }
   ]
-}
+}"""
 
-Generates up to 8 weeks. Each week must have exactly 2 resources. 
+CURRENT_TREND_SYSTEM_PROMPT = (
+    "You are a career advisor generating a personalized learning roadmap "
+    "based on CURRENT market demand. Focus on skills and tools that are "
+    "in high demand RIGHT NOW in job postings. Prioritize established, "
+    "proven technologies that employers are actively hiring for today."
+    + _BASE_RULES
+)
 
-CRITICAL INSTRUCTION FOR URLs: 
-You MUST call the `perform_web_search` tool BEFORE generating the JSON to find working, real URLs (e.g., links to Udemy, Coursera, freeCodeCamp, official docs) for every resource you intend to include. Do NOT output empty strings for URLs. Wait for the tool to return results, then use those links in your final JSON output. Return ONLY valid JSON, no markdown or explanation."""
+FUTURE_TREND_SYSTEM_PROMPT = (
+    "You are a career advisor generating a personalized learning roadmap "
+    "based on FUTURE and EMERGING market trends. Focus on skills and tools "
+    "that are gaining momentum and will be in high demand in the next 1-3 years. "
+    "Prioritize cutting-edge technologies, AI/ML integrations, and emerging "
+    "frameworks that forward-thinking companies are beginning to adopt. "
+    "Use web search to identify the latest industry forecasts and emerging tech trends."
+    + _BASE_RULES
+)
 
 
 class RoadmapService:
@@ -67,7 +90,28 @@ class RoadmapService:
         trend_name: str,
         goal: str | None,
         user_skills: list[str] | None,
+        use_market_trends: bool = False,
+        # Org context (optional — only passed when generating for an org)
+        org_profile: dict | None = None,
+        role_skills: list[str] | None = None,
     ) -> LearningRoadmap:
+        """
+        Generate and persist a learning roadmap.
+
+        Args:
+            user_id:           The user who owns/initiated the roadmap.
+            trend_name:        Career/role name (e.g. "Backend Developer").
+            goal:              User-defined goal string.
+            user_skills:       Skills of the individual user.
+            use_market_trends: False = current demand, True = future/emerging trends.
+            org_profile:       Dict with org context (name, industry, description,
+                               core_services, tech_stacks). Passed from org roadmaps.
+            role_skills:       Aggregated skills of org members in the same role.
+                               Used to calibrate difficulty/focus for the team.
+        """
+        trend_mode = "future" if use_market_trends else "current"
+
+        # Fetch market stats for the trend
         trends = await self.job_repo.get_trending(limit=10)
         trend_stats = None
         for t in trends:
@@ -80,6 +124,9 @@ class RoadmapService:
             trend_name=trend_name,
             trend_stats=trend_stats,
             goal=goal,
+            use_market_trends=use_market_trends,
+            org_profile=org_profile,
+            role_skills=role_skills,
         )
 
         roadmap = await self.repo.create_roadmap({
@@ -87,7 +134,9 @@ class RoadmapService:
             "title": roadmap_data.get("title", f"Roadmap to {trend_name}"),
             "trend_name": trend_name,
             "goal": goal,
-            "total_weeks": roadmap_data.get("total_weeks", 12),
+            "total_weeks": roadmap_data.get("total_weeks", 8),
+            "trend_mode": trend_mode,
+            "skill_gap_summary": roadmap_data.get("skill_gap_summary"),
         })
 
         for step_data in roadmap_data.get("steps", []):
@@ -124,28 +173,17 @@ class RoadmapService:
     async def toggle_resource(
         self, user_id: str, resource_id: str, completed: bool
     ) -> dict:
-        """
-        Check or uncheck a single resource for the current user.
-
-        Side effects (all automatic):
-          - Upserts learning_roadmap_resource_progress
-          - Derives step status from resource completion count
-          - Updates learning_roadmap_progress.status
-          - Derives roadmap status from step completion count
-          - Updates learning_roadmaps.status
-        """
+        """Check or uncheck a single resource. Auto-cascades to step and roadmap status."""
         from fastapi import HTTPException
         from sqlalchemy import select
         from app.models.roadmap import LearningRoadmapStep
 
-        # 1. Load the resource
         resource = await self.repo.get_resource(resource_id)
         if not resource:
             raise HTTPException(status_code=404, detail="Resource not found.")
 
         step_id = resource.step_id
 
-        # 2. Upsert resource progress
         rp = await self.repo.upsert_resource_progress(
             user_id=user_id,
             resource_id=resource_id,
@@ -153,23 +191,17 @@ class RoadmapService:
             completed=completed,
         )
 
-        # 3. Load the step with all its resources + resource_progress
         step = await self.repo.get_step(step_id)
         if not step:
             raise HTTPException(status_code=404, detail="Step not found.")
 
         total_resources = len(step.resources)
 
-        # 4. Count completed resources for this user in this step
         completed_resources = sum(
             1 for r in step.resources
-            if any(
-                p.user_id == user_id and p.completed
-                for p in r.resource_progress
-            )
+            if any(p.user_id == user_id and p.completed for p in r.resource_progress)
         )
 
-        # 5. Derive step status
         if completed_resources == 0:
             new_step_status = "not_started"
         elif completed_resources < total_resources:
@@ -177,19 +209,16 @@ class RoadmapService:
         else:
             new_step_status = "completed"
 
-        # 6. Update step progress record
         step_progress = await self.repo.get_progress(user_id, step_id)
         if step_progress:
             await self.repo.update_progress(step_progress, new_step_status)
         else:
-            # Create missing progress record (e.g. org member enrolled after creation)
             await self.repo.create_progress({
                 "user_id": user_id,
                 "step_id": step_id,
                 "status": new_step_status,
             })
 
-        # 7. Recalculate roadmap-level stats
         roadmap = await self.repo.get_by_id_any_user(step.roadmap_id)
         roadmap_status = "not_started"
         steps_completed = 0
@@ -201,11 +230,9 @@ class RoadmapService:
             for s in roadmap.steps:
                 for p in s.progress:
                     if p.user_id == user_id:
-                        # Use freshly derived status for current step
-                        if s.id == step_id:
-                            progress_statuses.append(new_step_status)
-                        else:
-                            progress_statuses.append(p.status)
+                        progress_statuses.append(
+                            new_step_status if s.id == step_id else p.status
+                        )
                         break
                 else:
                     progress_statuses.append("not_started")
@@ -223,14 +250,6 @@ class RoadmapService:
 
         await self.db.commit()
 
-        completion_percentage = (
-            round(steps_completed / total_steps * 100, 1) if total_steps else 0.0
-        )
-        resource_completion_pct = (
-            round(completed_resources / total_resources * 100, 1)
-            if total_resources else 0.0
-        )
-
         return {
             "resource_id": resource_id,
             "completed": rp.completed,
@@ -239,23 +258,23 @@ class RoadmapService:
             "step_status": new_step_status,
             "resources_completed": completed_resources,
             "total_resources": total_resources,
-            "resource_completion_pct": resource_completion_pct,
+            "resource_completion_pct": round(completed_resources / total_resources * 100, 1) if total_resources else 0.0,
             "roadmap_status": roadmap_status,
             "steps_completed": steps_completed,
             "total_steps": total_steps,
-            "completion_percentage": completion_percentage,
+            "completion_percentage": round(steps_completed / total_steps * 100, 1) if total_steps else 0.0,
         }
 
     # ------------------------------------------------------------------
-    # Step progress — manual override (kept for flexibility)
+    # Step progress — manual override
     # ------------------------------------------------------------------
 
     async def update_step_progress(
         self, user_id: str, step_id: str, status: str, notes: str | None = None
     ) -> dict:
         from fastapi import HTTPException
+        from sqlalchemy import select
 
-        # Validate status value
         valid_statuses = {"not_started", "in_progress", "completed"}
         if status not in valid_statuses:
             raise HTTPException(
@@ -269,21 +288,16 @@ class RoadmapService:
 
         await self.repo.update_progress(progress, status, notes)
 
-        # --- Sync resource progress with manual override ---
-        # Load the step with its resources to keep checkbox state consistent
+        # Sync resource progress with manual override
         from app.models.roadmap import LearningRoadmapStep
         step_for_sync_result = await self.db.execute(
             select(LearningRoadmapStep).where(LearningRoadmapStep.id == step_id)
         )
         step_for_sync = step_for_sync_result.scalar_one_or_none()
         if step_for_sync:
-            from sqlalchemy.orm import selectinload
-            from app.models.roadmap import LearningRoadmapStepResource
-            from sqlalchemy.ext.asyncio import AsyncSession
             step_with_resources = await self.repo.get_step(step_id)
             if step_with_resources:
                 if status == "completed":
-                    # Mark all resources as completed
                     await self.repo.mark_all_resources_in_step(
                         user_id=user_id,
                         step_id=step_id,
@@ -291,13 +305,9 @@ class RoadmapService:
                         completed=True,
                     )
                 elif status == "not_started":
-                    # Clear all resource progress
                     await self.repo.clear_resource_progress_for_step(user_id, step_id)
 
-        # --- Auto-update roadmap status ---
-        # Find the roadmap this step belongs to
         from app.models.roadmap import LearningRoadmapStep
-        from sqlalchemy import select
         step_result = await self.db.execute(
             select(LearningRoadmapStep).where(LearningRoadmapStep.id == step_id)
         )
@@ -315,18 +325,15 @@ class RoadmapService:
                 for s in roadmap.steps:
                     for p in s.progress:
                         if p.user_id == user_id:
-                            # Use the freshly updated value for the current step
-                            if s.id == step_id:
-                                progress_statuses.append(status)
-                            else:
-                                progress_statuses.append(p.status)
+                            progress_statuses.append(
+                                status if s.id == step_id else p.status
+                            )
                             break
                     else:
                         progress_statuses.append("not_started")
 
                 steps_completed = progress_statuses.count("completed")
 
-                # Determine new roadmap status
                 if total_steps > 0 and steps_completed == total_steps:
                     roadmap_status = "completed"
                 elif any(s in ("in_progress", "completed") for s in progress_statuses):
@@ -338,10 +345,6 @@ class RoadmapService:
 
         await self.db.commit()
 
-        completion_percentage = (
-            round(steps_completed / total_steps * 100, 1) if total_steps else 0.0
-        )
-
         return {
             "step_id": step_id,
             "status": progress.status,
@@ -350,8 +353,12 @@ class RoadmapService:
             "roadmap_status": roadmap_status,
             "steps_completed": steps_completed,
             "total_steps": total_steps,
-            "completion_percentage": completion_percentage,
+            "completion_percentage": round(steps_completed / total_steps * 100, 1) if total_steps else 0.0,
         }
+
+    # ------------------------------------------------------------------
+    # LLM call
+    # ------------------------------------------------------------------
 
     async def _call_llm(
         self,
@@ -359,28 +366,80 @@ class RoadmapService:
         trend_name: str,
         trend_stats: dict | None,
         goal: str | None,
+        use_market_trends: bool = False,
+        org_profile: dict | None = None,
+        role_skills: list[str] | None = None,
     ) -> dict:
-        skills_data = []
-        try:
-            pass
-        except Exception:
-            pass
-
+        """
+        Build the LLM prompt with:
+        - Individual or team skills
+        - Company profile context (for org roadmaps)
+        - Role-based peer skills (skills of teammates in the same role)
+        - Market trend mode (current or future)
+        """
         user_skills_text = ", ".join(user_skills) if user_skills else "not specified"
+
         trend_stats_text = ""
         if trend_stats:
             trend_stats_text = (
-                f"\nTrend stats: {trend_stats.get('job_count', 'N/A')} jobs listed, "
-                f"{trend_stats.get('growth_pct', 'N/A')}% growth"
+                f"\nCurrent market data: {trend_stats.get('job_count', 'N/A')} active job postings, "
+                f"{trend_stats.get('growth_pct', 'N/A')}% growth."
             )
 
+        # --- Company / org profile context ---
+        org_context_text = ""
+        if org_profile:
+            parts = []
+            if org_profile.get("name"):
+                parts.append(f"Company: {org_profile['name']}")
+            if org_profile.get("industry"):
+                parts.append(f"Industry: {org_profile['industry']}")
+            if org_profile.get("description"):
+                parts.append(f"Description: {org_profile['description']}")
+            if org_profile.get("core_services"):
+                services = org_profile["core_services"]
+                if isinstance(services, list):
+                    parts.append(f"Core services: {', '.join(str(s) for s in services)}")
+            if org_profile.get("tech_stacks"):
+                stacks = org_profile["tech_stacks"]
+                if isinstance(stacks, list):
+                    parts.append(f"Tech stack in use: {', '.join(str(s) for s in stacks)}")
+            if parts:
+                org_context_text = "\nCompany context:\n" + "\n".join(f"  - {p}" for p in parts)
+
+        # --- Role-based peer skills context ---
+        role_skills_text = ""
+        if role_skills:
+            role_skills_text = (
+                f"\nSkills of teammates in the same role: {', '.join(role_skills)}. "
+                "Use this to calibrate the roadmap difficulty — cover gaps but don't repeat what the team already knows well."
+            )
+
+        # --- Trend mode instruction ---
+        trend_mode_instruction = (
+            "\nFocus on FUTURE and EMERGING trends: identify skills that will be critical "
+            "in the next 1-3 years. Search for '2025 2026 future trends' and 'emerging technologies' "
+            "for this role."
+            if use_market_trends
+            else "\nFocus on CURRENT market demand: skills that are actively required in job postings today."
+        )
+
         user_prompt = (
-            f"Generate a learning roadmap for a user who wants to become a {trend_name}.\n"
-            f"Goal: {goal or 'Become a ' + trend_name}\n"
+            f"Generate a learning roadmap for a user targeting the role: {trend_name}.\n"
+            f"Goal: {goal or 'Become a proficient ' + trend_name}\n"
             f"User's current skills: {user_skills_text}"
-            f"{trend_stats_text}\n\n"
-            f"Generate a comprehensive roadmap that bridges the gap between "
-            f"the user's current skills and the target career. Please look up real resources to include as links."
+            f"{trend_stats_text}"
+            f"{org_context_text}"
+            f"{role_skills_text}"
+            f"{trend_mode_instruction}\n\n"
+            f"Generate a comprehensive week-by-week roadmap that bridges the gap between "
+            f"the user's current skills and the target role. Use web search to find real, "
+            f"working resource URLs before generating the JSON."
+        )
+
+        system_prompt = (
+            FUTURE_TREND_SYSTEM_PROMPT if use_market_trends
+            else CURRENT_TREND_SYSTEM_PROMPT
         )
 
         llm = HostedLLM(
@@ -388,26 +447,22 @@ class RoadmapService:
             temperature=0.7,
             max_tokens=4000,
         )
-        
+
         agent = create_react_agent(
             model=llm,
             tools=[perform_web_search],
-            prompt=ROADMAP_SYSTEM_PROMPT
+            prompt=system_prompt,
         )
-        
+
         messages = [HumanMessage(content=user_prompt)]
-        
-        # Increase timeout or try to give it more time if it uses multiple tool calls
         result = await agent.ainvoke({"messages": messages})
-        
-        import re
-        # Find the last message from the assistant that actually contains the JSON
+
         final_content = ""
         for msg in reversed(result["messages"]):
             if getattr(msg, "content", "") and "{" in str(msg.content):
                 final_content = msg.content
                 break
-                
+
         if not final_content:
             final_content = result["messages"][-1].content
 
@@ -415,32 +470,27 @@ class RoadmapService:
         try:
             return json.loads(cleaned)
         except json.JSONDecodeError as e:
-            # If it still fails, the LLM probably got cut off via token limit
-            # or the model output invalid JSON escaping. Log the error.
-            print(f"JSON Parsing Error. Raw content: {cleaned}")
+            logger.error("Roadmap JSON parse error. Raw: %s", cleaned[:500])
             raise e
 
     @staticmethod
     def _clean_response(content: Any) -> str:
-        if hasattr(content, "content"):  # In case an AIMessage object slips through
+        if hasattr(content, "content"):
             content = content.content
-            
+
         cleaned = str(content).strip()
-        
-        # Handle ```json ... ``` blocks
+
         if "```json" in cleaned:
             cleaned = cleaned.split("```json")[-1]
             if "```" in cleaned:
                 cleaned = cleaned.split("```")[0]
         elif "```" in cleaned:
-            # Handle generic ``` ... ``` blocks
             parts = cleaned.split("```")
             if len(parts) >= 3:
                 cleaned = parts[1]
-                # Sometimes the first line is language name, strip it
                 if "\n" in cleaned:
                     first_line = cleaned.split("\n", 1)[0].strip()
                     if not first_line.startswith("{") and not first_line.startswith("["):
                         cleaned = cleaned.split("\n", 1)[1]
-                        
+
         return cleaned.strip()

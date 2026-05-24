@@ -56,13 +56,21 @@ async def create_roadmap(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Generate a new AI-powered learning roadmap."""
+    """
+    Generate a new AI-powered learning roadmap.
+
+    Set `use_market_trends: true` to generate a future-focused roadmap
+    based on emerging and projected market trends instead of current demand.
+    The `trend_mode` field in the response ("current" or "future") tells
+    the frontend which mode was used, so it can badge/label the roadmap.
+    """
     service = RoadmapService(db)
     roadmap = await service.generate_and_save(
         user_id=current_user.id,
         trend_name=req.trend_name,
         goal=req.goal,
         user_skills=current_user.skills,
+        use_market_trends=req.use_market_trends,
     )
     return _build_roadmap_out(roadmap, current_user.id)
 
@@ -166,6 +174,21 @@ def _build_progress_stats(roadmap, user_id: str) -> tuple[int, int, float]:
 
 
 def _build_summary(roadmap) -> str:
+    """
+    Return the summary for a roadmap.
+
+    Priority:
+    1. skill_gap_summary — LLM-generated, personalized skill gap analysis
+       stored at generation time. This is the richest and most useful summary.
+    2. Auto-computed fallback — plain topic list for older roadmaps that
+       predate the skill_gap_summary column.
+    """
+    # Primary: use the LLM-generated skill gap analysis if available
+    skill_gap = getattr(roadmap, "skill_gap_summary", None)
+    if skill_gap and skill_gap.strip():
+        return skill_gap.strip()
+
+    # Fallback: compute from step topics (for roadmaps generated before this feature)
     sorted_steps = sorted(roadmap.steps, key=lambda s: s.week_number)
     topics = [s.topic for s in sorted_steps]
 
@@ -193,6 +216,7 @@ def _build_list_item(roadmap, user_id: str) -> RoadmapListItem:
         total_weeks=roadmap.total_weeks,
         status=roadmap.status,
         created_at=roadmap.created_at,
+        trend_mode=getattr(roadmap, "trend_mode", "current"),
         steps_completed=steps_completed,
         total_steps=total_steps,
         completion_percentage=percentage,
@@ -260,6 +284,8 @@ def _build_roadmap_out(roadmap, user_id: str) -> RoadmapOut:
         created_at=roadmap.created_at,
         steps=sorted(steps_out, key=lambda s: s.week_number),
         summary=summary,
+        skill_gap_summary=getattr(roadmap, "skill_gap_summary", None),
+        trend_mode=getattr(roadmap, "trend_mode", "current"),
         steps_completed=steps_completed,
         total_steps=total_steps,
         completion_percentage=percentage,

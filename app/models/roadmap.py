@@ -24,6 +24,15 @@ class LearningRoadmap(Base):
     goal: Mapped[str | None] = mapped_column(Text, nullable=True)
     total_weeks: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[str] = mapped_column(String(20), default="completed", nullable=False)
+
+    # "current" — based on today's market demand
+    # "future"  — based on projected/emerging market trends
+    trend_mode: Mapped[str] = mapped_column(String(20), default="current", nullable=False)
+
+    # LLM-generated skill gap analysis — persisted so it's available without
+    # re-running the LLM on every GET request
+    skill_gap_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )

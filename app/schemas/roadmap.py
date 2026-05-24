@@ -62,6 +62,8 @@ class RoadmapListItem(BaseModel):
     total_weeks: int
     status: str
     created_at: datetime
+    # "current" | "future" — lets frontend badge the card accordingly
+    trend_mode: str = "current"
     # Progress stats
     steps_completed: int = 0
     total_steps: int = 0
@@ -83,8 +85,13 @@ class RoadmapOut(BaseModel):
     status: str
     created_at: datetime
     steps: list[StepOut] = []
-    # Auto-computed summary
+    # summary = skill_gap_summary if available, else auto-computed topic list
     summary: str | None = None
+    # Raw LLM skill gap analysis — same as summary when available,
+    # exposed separately so the frontend can display it in a dedicated section
+    skill_gap_summary: str | None = None
+    # "current" | "future" — lets frontend badge/label the roadmap
+    trend_mode: str = "current"
     # Progress stats
     steps_completed: int = 0
     total_steps: int = 0
@@ -100,6 +107,13 @@ class RoadmapOut(BaseModel):
 class RoadmapGenerateRequest(BaseModel):
     trend_name: str
     goal: str | None = None
+    use_market_trends: bool = False
+    """
+    False (default) → generate roadmap based on CURRENT market demand.
+    True            → generate roadmap based on FUTURE/emerging market trends.
+    Frontend shows this as a toggle e.g. "Include future trends".
+    The trend_mode field in the response tells the frontend which mode was used.
+    """
 
 
 class StepProgressUpdate(BaseModel):

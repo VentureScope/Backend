@@ -23,6 +23,7 @@ from app.schemas.user import (
     CVUploadResponse,
     ProfilePictureUploadResponse,
     MessageResponse,
+    ReadinessScoreOut,
 )
 from app.schemas.experience import (
     ExperienceCreate,
@@ -44,6 +45,64 @@ async def get_current_user_profile(
 ):
     """Get current user's profile."""
     return current_user
+
+
+@router.get("/me/readiness", response_model=ReadinessScoreOut)
+async def get_career_readiness_score(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: AsyncSession = Depends(get_db),
+    refresh: bool = False,
+):
+    """
+    Get the user's career readiness score.
+
+    Analyses the gap between the user's current skills and their target career
+    role (career_interest). Returns:
+      - overall_score (0-100)
+      - level (Beginner / Developing / Intermediate / Advanced)
+      - matched_skills — skills the user already has for this role
+      - missing_skills — critical skills they are lacking
+      - transferable_skills — partial matches that need deepening
+      - top_recommendations — 3 concrete next steps
+      - market_context — role demand + top required skills right now
+      - summary — 2-3 sentence personalized assessment
+
+    If career_interest is not set, the best-fit role is inferred from
+    the user's skills and current market trends.
+
+    Results are cached for 24 hours and invalidated automatically when
+    skills or career_interest change. Pass ?refresh=true to force a recompute.
+    """
+    from app.services.readiness_service import ReadinessService
+
+    if refresh:
+        # Clear cache so the service recomputes fresh
+        current_user.readiness_cache = None
+
+    svc = ReadinessService(db)
+    result = await svc.get_score(current_user)
+
+    # Coerce market_context to the schema type
+    mc = result.get("market_context", {})
+    if not isinstance(mc, dict):
+        mc = {}
+
+    return ReadinessScoreOut(
+        career_interest=result.get("career_interest", current_user.career_interest or ""),
+        overall_score=result.get("overall_score", 0),
+        level=result.get("level", "Unknown"),
+        matched_skills=result.get("matched_skills", []),
+        missing_skills=result.get("missing_skills", []),
+        transferable_skills=result.get("transferable_skills", []),
+        top_recommendations=result.get("top_recommendations", []),
+        market_context={
+            "role_demand": mc.get("role_demand", "unknown"),
+            "top_required_skills": mc.get("top_required_skills", []),
+        },
+        summary=result.get("summary", ""),
+        cached=result.get("cached", False),
+        cached_at=result.get("cached_at"),
+    )
 
 
 @router.post("/me/retry-embedding", response_model=MessageResponse)

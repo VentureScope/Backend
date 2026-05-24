@@ -158,3 +158,42 @@ class MessageResponse(BaseModel):
 
     message: str
     detail: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Career Readiness Score
+# ---------------------------------------------------------------------------
+
+class ReadinessMarketContext(BaseModel):
+    role_demand: str = "unknown"           # low | medium | high | very_high
+    top_required_skills: list[str] = []
+
+
+class ReadinessScoreOut(BaseModel):
+    """
+    Career readiness score returned by GET /api/users/me/readiness.
+
+    Fields:
+      career_interest       — the role that was analysed (user-set or inferred)
+      overall_score         — 0-100 readiness score
+      level                 — Beginner | Developing | Intermediate | Advanced
+      matched_skills        — user skills that match the target role
+      missing_skills        — critical skills the user is missing
+      transferable_skills   — partial matches / skills that need deepening
+      top_recommendations   — 3 concrete next-step actions
+      market_context        — role demand + top required skills from the market
+      summary               — 2-3 sentence personalized assessment
+      cached                — true if returned from cache, false if freshly computed
+      cached_at             — ISO timestamp of when the score was last computed
+    """
+    career_interest: str
+    overall_score: int
+    level: str
+    matched_skills: list[str] = []
+    missing_skills: list[str] = []
+    transferable_skills: list[str] = []
+    top_recommendations: list[str] = []
+    market_context: ReadinessMarketContext = ReadinessMarketContext()
+    summary: str = ""
+    cached: bool = False
+    cached_at: str | None = None

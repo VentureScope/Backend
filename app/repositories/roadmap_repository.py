@@ -92,6 +92,8 @@ class RoadmapRepository:
             goal=data.get("goal"),
             total_weeks=data["total_weeks"],
             status=data.get("status", "not_started"),
+            trend_mode=data.get("trend_mode", "current"),
+            skill_gap_summary=data.get("skill_gap_summary"),
         )
         self.db.add(roadmap)
         await self.db.flush()

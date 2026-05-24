@@ -361,6 +361,7 @@ async def assign_roadmap(
         user_id=current_user.id,
         trend_name=data.trend_name,
         goal=data.goal,
+        use_market_trends=data.use_market_trends,
     )
 
 

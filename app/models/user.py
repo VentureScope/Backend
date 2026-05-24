@@ -55,6 +55,13 @@ class User(Base):
         String(1000), nullable=True
     )  # E-student summarized profile
 
+    # Career readiness score cache — avoids re-running the LLM on every request.
+    # Invalidated when: skills change, career_interest changes, or >24 hours old.
+    # Structure: { score, level, matched_skills, missing_skills, transferable_skills,
+    #              top_recommendations, market_context, summary, career_used,
+    #              cached_at (ISO string), skills_snapshot (list) }
+    readiness_cache: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
     # Store generated similarity embedding using pgvector
     embedding: Mapped[list[float] | None] = mapped_column(
         Vector(settings.EMBEDDING_DIMENSIONS), nullable=True

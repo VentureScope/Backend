@@ -246,6 +246,11 @@ class OrgRoadmapAssign(BaseModel):
     """Request body for assigning/generating a roadmap for the org."""
     trend_name: str
     goal: str | None = None
+    use_market_trends: bool = False
+    """
+    False (default) → current market demand context.
+    True            → future/emerging market trends context.
+    """
 
 
 class MyEnrollment(BaseModel):
