@@ -54,8 +54,8 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=registry,ref=ghcr.io/venturescope/backend:latest
-          cache-to: type=inline
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Build and push Worker image
         uses: docker/build-push-action@v5
@@ -65,8 +65,15 @@ jobs:
           push: true
           tags: ${{ steps.meta-worker.outputs.tags }}
           labels: ${{ steps.meta-worker.outputs.labels }}
-          cache-from: type=registry,ref=ghcr.io/venturescope/backend-worker:latest
-          cache-to: type=inline
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Compute a 10-char revision suffix from the commit SHA.
+      # Azure Container Apps revision names must be ≤10 alphanumeric chars.
+      # This forces a new revision on every push regardless of image digest.
+      - name: Set revision suffix
+        id: rev
+        run: echo "suffix=$(echo ${{ github.sha }} | cut -c1-10)" >> $GITHUB_OUTPUT
 
       - name: Azure Login
         uses: azure/login@v1
@@ -78,11 +85,13 @@ jobs:
           az containerapp update \
             --name venturescope \
             --resource-group ${{ secrets.AZURE_RG }} \
-            --image ghcr.io/venturescope/backend:${{ steps.meta.outputs.version }}
+            --image ghcr.io/venturescope/backend:${{ steps.meta.outputs.version }} \
+            --revision-suffix ${{ steps.rev.outputs.suffix }}
 
       - name: Deploy Worker to Azure Container Apps
         run: |
           az containerapp update \
             --name backgroundworker \
             --resource-group ${{ secrets.AZURE_RG }} \
-            --image ghcr.io/venturescope/backend-worker:${{ steps.meta-worker.outputs.version }}
+            --image ghcr.io/venturescope/backend-worker:${{ steps.meta-worker.outputs.version }} \
+            --revision-suffix ${{ steps.rev.outputs.suffix }}
