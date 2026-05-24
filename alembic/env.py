@@ -36,6 +36,7 @@ from app.models.roadmap import LearningRoadmap, LearningRoadmapStep, LearningRoa
 from app.models.resume import Resume
 from app.models.organization import Organization, OrganizationMember, OrganizationInvite, OrganizationRoadmap
 from app.models.org_chat import OrgChatSession, OrgChatMessage
+from app.models.certificate import Certificate
 
 # Set target metadata for autogenerate
 from app.core.database import Base

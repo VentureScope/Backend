@@ -30,6 +30,11 @@ from app.schemas.experience import (
     ExperienceUpdate,
     ExperienceResponse,
 )
+from app.schemas.certificate import (
+    CertificateCreate,
+    CertificateUpdate,
+    CertificateResponse,
+)
 from app.models.github_sync_snapshot import GitHubSyncSnapshot
 from app.schemas.oauth import GitHubProfileSyncResponse, GitHubSyncedDataResponse
 from app.services.user_service import UserService
@@ -510,3 +515,87 @@ async def delete_experience(
     if not success:
         raise HTTPException(status_code=404, detail="Experience not found")
     return MessageResponse(message="Experience deleted successfully")
+
+
+# ===========================================================================
+# Certificates
+# ===========================================================================
+
+@router.post("/me/certificates", response_model=CertificateResponse, status_code=201)
+async def create_certificate(
+    data: CertificateCreate,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """
+    Add a new professional certificate or credential.
+
+    Fields:
+    - name: Certificate name (e.g. "AWS Certified Solutions Architect")
+    - issuer: Issuing organization (e.g. "Amazon Web Services")
+    - credential_id: Optional certificate/license ID
+    - credential_url: Optional verification URL
+    - issue_date: When the certificate was issued
+    - expiry_date: When it expires (null = does not expire)
+    - description: Optional description or notes
+    """
+    from app.services.certificate_service import CertificateService
+    service = CertificateService(db)
+    return await service.create_certificate(current_user.id, data)
+
+
+@router.get("/me/certificates", response_model=list[CertificateResponse])
+async def list_certificates(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """List all certificates for the current user, newest first."""
+    from app.services.certificate_service import CertificateService
+    service = CertificateService(db)
+    return await service.get_all_for_user(current_user.id)
+
+
+@router.get("/me/certificates/{certificate_id}", response_model=CertificateResponse)
+async def get_certificate(
+    certificate_id: str,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Get a specific certificate by ID."""
+    from app.repositories.certificate_repository import CertificateRepository
+    repo = CertificateRepository(db)
+    cert = await repo.get_by_id(certificate_id)
+    if not cert or cert.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Certificate not found")
+    return cert
+
+
+@router.put("/me/certificates/{certificate_id}", response_model=CertificateResponse)
+async def update_certificate(
+    certificate_id: str,
+    data: CertificateUpdate,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Update a certificate. Only provided fields are changed."""
+    from app.services.certificate_service import CertificateService
+    service = CertificateService(db)
+    cert = await service.update_certificate(certificate_id, current_user.id, data)
+    if not cert:
+        raise HTTPException(status_code=404, detail="Certificate not found")
+    return cert
+
+
+@router.delete("/me/certificates/{certificate_id}", response_model=MessageResponse)
+async def delete_certificate(
+    certificate_id: str,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Delete a certificate permanently."""
+    from app.services.certificate_service import CertificateService
+    service = CertificateService(db)
+    success = await service.delete_certificate(certificate_id, current_user.id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Certificate not found")
+    return MessageResponse(message="Certificate deleted successfully")

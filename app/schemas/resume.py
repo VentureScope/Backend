@@ -55,9 +55,26 @@ class ResumeOut(BaseModel):
     certifications: list[CertificationSection] = []
     trending_skills_highlighted: list[str] = []
     created_at: datetime
+    updated_at: datetime | None = None
     # Informational messages for missing profile sections (not an error)
     warnings: list[str] = []
 
 
 class ResumeGenerateRequest(BaseModel):
     target_role: str
+
+
+class ResumeUpdateRequest(BaseModel):
+    """
+    Partial update for a generated resume.
+    All fields are optional — only fields provided will be updated.
+    Used by PATCH /api/resume/{resume_id}.
+    """
+    target_role: str | None = None
+    professional_summary: str | None = None
+    skills: SkillSection | None = None
+    experience: list[ExperienceSection] | None = None
+    education: list[EducationSection] | None = None
+    projects: list[ProjectSection] | None = None
+    certifications: list[CertificationSection] | None = None
+    trending_skills_highlighted: list[str] | None = None

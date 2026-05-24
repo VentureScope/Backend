@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 import uuid
@@ -25,6 +26,36 @@ class ResumeRepository:
         self.db.add(resume)
         await self.db.flush()
         return resume
+
+    async def update(self, resume: Resume, data: dict) -> Resume:
+        """
+        Partially update a resume — only keys present in data are changed.
+        Allowed fields: target_role, professional_summary, skills,
+        experience, education, projects, certifications,
+        trending_skills_highlighted.
+        """
+        allowed = {
+            "target_role",
+            "professional_summary",
+            "skills",
+            "experience",
+            "education",
+            "projects",
+            "certifications",
+            "trending_skills_highlighted",
+        }
+        for key, value in data.items():
+            if key in allowed:
+                setattr(resume, key, value)
+
+        # Manually set updated_at since onupdate lambdas don't fire on flush
+        resume.updated_at = datetime.now(timezone.utc)
+        await self.db.flush()
+        return resume
+
+    async def delete(self, resume: Resume) -> None:
+        await self.db.delete(resume)
+        await self.db.flush()
 
     async def list_by_user(self, user_id: str) -> list[Resume]:
         result = await self.db.execute(
