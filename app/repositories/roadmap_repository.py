@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import selectinload
 import uuid
 
@@ -212,19 +213,16 @@ class RoadmapRepository:
         completed: bool,
     ) -> LearningRoadmapResourceProgress:
         """
-        Create or update resource progress for a user.
-        Sets completed_at when marking complete; clears it when unchecking.
+        Atomically insert or update resource progress using PostgreSQL
+        INSERT ... ON CONFLICT DO UPDATE. This prevents the race condition
+        where SELECT returns None but the row already exists in the DB,
+        causing a UniqueViolationError on INSERT.
         """
-        existing = await self.get_resource_progress(user_id, resource_id)
         now = datetime.now(timezone.utc)
 
-        if existing:
-            existing.completed = completed
-            existing.completed_at = now if completed else None
-            await self.db.flush()
-            return existing
-        else:
-            rp = LearningRoadmapResourceProgress(
+        stmt = (
+            pg_insert(LearningRoadmapResourceProgress)
+            .values(
                 id=str(uuid.uuid4()),
                 user_id=user_id,
                 resource_id=resource_id,
@@ -232,9 +230,19 @@ class RoadmapRepository:
                 completed=completed,
                 completed_at=now if completed else None,
             )
-            self.db.add(rp)
-            await self.db.flush()
-            return rp
+            .on_conflict_do_update(
+                constraint="uq_user_resource_progress",
+                set_={
+                    "completed": completed,
+                    "completed_at": now if completed else None,
+                },
+            )
+            .returning(LearningRoadmapResourceProgress)
+        )
+
+        result = await self.db.execute(stmt)
+        await self.db.flush()
+        return result.scalar_one()
 
     async def get_resource_progress_for_step(
         self, user_id: str, step_id: str
