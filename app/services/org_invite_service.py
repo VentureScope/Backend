@@ -88,7 +88,8 @@ class OrgInviteService:
         }
 
     async def _dispatch_invite_email(self, invite, org, inviter_name: str) -> None:
-        invite_url = f"{settings.FRONTEND_URL}/organizations/invites/accept?token={invite.token}"
+        from datetime import datetime, timezone
+        invite_url = f"{settings.FRONTEND_URL}/dashboard/organization/invites/accept?token={invite.token}"
         try:
             from app.services.email_service import get_email_provider
             provider = get_email_provider()
@@ -98,6 +99,15 @@ class OrgInviteService:
                 "invite_url": invite_url,
                 "expire_hours": "48",
                 "team_role": invite.team_role or "",
+                "team_role_line": (
+                    f'<p style="margin: 8px 0 0; font-size: 13px; color: #6b7280;">Role: <strong style="color: #374151;">{invite.team_role}</strong></p>'
+                    if invite.team_role else ""
+                ),
+                "team_role_txt": (
+                    f"Your role: {invite.team_role}\n"
+                    if invite.team_role else ""
+                ),
+                "year": str(datetime.now(timezone.utc).year),
             }
             html_body = _render_template("org_invite.html", context)
             text_body = _render_template("org_invite.txt", context)

@@ -4,7 +4,7 @@ You're invited to join {{org_name}} on VentureScope
 Hi there,
 
 {{inviter_name}} has invited you to join {{org_name}} on VentureScope.
-
+{{team_role_txt}}
 VentureScope helps teams discover career paths, build learning roadmaps,
 and grow together.
 
