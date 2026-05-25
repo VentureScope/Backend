@@ -945,9 +945,9 @@ query ($username: String!) {{
             raise ValueError("User not found")
 
         user.github_username = profile["github_username"]
-        if profile.get("full_name"):
+        if profile.get("full_name")and not user.full_name:
             user.full_name = profile["full_name"]
-        if profile.get("profile_picture_url"):
+        if profile.get("profile_picture_url") and not user.profile_picture_url:
             user.profile_picture_url = profile["profile_picture_url"]
 
         await self.user_repo.update(user)
