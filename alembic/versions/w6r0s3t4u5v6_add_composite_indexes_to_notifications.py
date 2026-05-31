@@ -22,6 +22,11 @@ ix_notifications_created_at indexes are kept because other queries
 
 from alembic import op
 
+revision: str = "w6r0s3t4u5v6"
+down_revision: str = "v5q9r2s3t4u5"
+branch_labels = None
+depends_on = None
+
 
 def upgrade() -> None:
     op.create_index(

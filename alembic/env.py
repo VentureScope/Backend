@@ -92,7 +92,23 @@ async def run_async_migrations() -> None:
     """Run migrations in async mode."""
     url = config.get_main_option("sqlalchemy.url")
 
-    connectable = create_async_engine(url, poolclass=pool.NullPool)
+    # Strip ?ssl=require from the URL and pass ssl via connect_args instead,
+    # since asyncpg doesn't parse the ssl query param from the DSN.
+    # Also disable the prepared statement cache so migrations work through
+    # Supabase's PgBouncer (transaction-mode pooler rejects named statements).
+    import ssl as ssl_module
+    clean_url = url.split("?")[0] if url else url
+    ssl_ctx = ssl_module.create_default_context()
+    ssl_ctx.check_hostname = False
+    ssl_ctx.verify_mode = ssl_module.CERT_NONE
+    connectable = create_async_engine(
+        clean_url,
+        poolclass=pool.NullPool,
+        connect_args={
+            "ssl": ssl_ctx,
+            "statement_cache_size": 0,
+        },
+    )
 
     async with connectable.connect() as connection:
         await connection.run_sync(do_run_migrations)
