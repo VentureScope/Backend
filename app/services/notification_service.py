@@ -64,13 +64,10 @@ class NotificationService:
         limit: int = 30,
         unread_only: bool = False,
     ) -> tuple[list[Notification], int, int]:
-        """Return (notifications, total, unread_count)."""
-        notifications = await self.repo.list_for_user(
+        """Return (notifications, total, unread_count) in a single DB query."""
+        return await self.repo.list_with_counts(
             user_id, skip=skip, limit=limit, unread_only=unread_only
         )
-        total = await self.repo.count_total(user_id)
-        unread = await self.repo.count_unread(user_id)
-        return notifications, total, unread
 
     async def mark_read(self, user_id: str, notif_id: str) -> Notification:
         notif = await self.repo.get_by_id(notif_id, user_id)
