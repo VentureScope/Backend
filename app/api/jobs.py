@@ -70,28 +70,30 @@ async def get_trending(
 @router.get("/in-demand-skills", response_model=list[InDemandSkill])
 async def get_in_demand_skills(
     limit: int = Query(20, description="Number of skills"),
+    period: int = Query(90, description="Days to look back"),
     db: AsyncSession = Depends(get_db),
 ):
-    cache_key = f"in-demand-skills:{limit}"
+    cache_key = f"in-demand-skills:{limit}:{period}"
     cached = _jobs_cache.get(cache_key)
     if cached is not None:
         return cached
     repo = JobRepository(db)
-    result = await repo.get_in_demand_skills(limit=limit)
+    result = await repo.get_in_demand_skills(limit=limit, period_days=period)
     _jobs_cache.set(cache_key, result)
     return result
 
 
 @router.get("/stats", response_model=JobStats)
 async def get_job_stats(
+    period: int = Query(90, description="Days to look back"),
     db: AsyncSession = Depends(get_db),
 ):
-    cache_key = "stats"
+    cache_key = f"stats:{period}"
     cached = _jobs_cache.get(cache_key)
     if cached is not None:
         return cached
     repo = JobRepository(db)
-    result = await repo.get_stats()
+    result = await repo.get_stats(period_days=period)
     _jobs_cache.set(cache_key, result)
     return result
 
