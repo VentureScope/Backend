@@ -245,7 +245,8 @@ async def redeploy_ml_run(
     try:
         run = await svc.get_ml_training_run(run_id)
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=str(exc))
+        logger.error("redeploy_ml_run fetch error: %s", exc)
+        raise HTTPException(status_code=502, detail=f"Could not fetch training run: {exc}")
 
     if not run:
         raise HTTPException(status_code=404, detail="Training run not found")
