@@ -114,7 +114,9 @@ class SupabaseService:
         """
         Return paginated rows from ml_training_runs.
         Columns: run_id, dag_id, model_type, status, accuracy, f1_score,
-                 auc_roc, record_count, created_at, deployed_at, deployed_by
+                 auc_roc, record_count, months_covered, class_balance
+                 (JSON with class_balance + cv_mae_by_role + cv_rmse_by_role),
+                 created_at, deployed_at, deployed_by
         """
         pool = await _get_pool()
 
@@ -140,7 +142,8 @@ class SupabaseService:
         rows_sql = f"""
             SELECT run_id, dag_id, model_type, status, accuracy, f1_score,
                    auc_roc, record_count, months_covered, model_size_bytes,
-                   staging_pkl_key, created_at, deployed_at, deployed_by,
+                   staging_pkl_key, class_balance,
+                   created_at, deployed_at, deployed_by,
                    notification_sent_at
             FROM ml_training_runs
             {where}
