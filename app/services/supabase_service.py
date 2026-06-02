@@ -77,7 +77,9 @@ async def _reset_pool() -> None:
         try:
             await _pool.close()
         except Exception:
-            pass
+            logger.exception(
+                "Failed to close asyncpg pool during reset; continuing with pool reset"
+            )
         _pool = None
         logger.warning("Supabase asyncpg pool reset due to connection error")
 
