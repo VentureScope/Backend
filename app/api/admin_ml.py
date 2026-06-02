@@ -66,75 +66,77 @@ def _verify_pipeline_hmac(body: bytes, signature_header: str | None) -> None:
 
 def _deploy_to_production_sync(staging_key: str) -> str:
     """
-    Promote a model's staging artifacts to production in DO Spaces:
-    1. Delete any existing production files for the SAME model_type
-       (e.g. all files under models/production/*/prophet/) to prevent
-       stale runs from accumulating and inflating the admin file count.
-    2. Copy the forecast CSV from staging to production.
-    3. Copy the metadata.json alongside it (contains metrics, used by the
-       admin dashboard — Kaggle outputs this as metrics.json, the pipeline
-       splits it per-model into metadata.json in staging).
+    Promote a model's staging artifacts to production in DO Spaces.
 
-    Returns the production key. Runs synchronously — call via asyncio.to_thread().
+    New flat production layout (mirrors Kaggle output structure):
+        models/production/forecasts_prophet.csv   ← from models/staging/YYYY-MM/prophet/forecasts.csv
+        models/production/forecasts_lstm.csv      ← from models/staging/YYYY-MM/lstm/forecasts.csv
+        models/production/metrics.json            ← from models/staging/YYYY-MM/metrics.json
+
+    Steps:
+    1. Delete the old forecast CSV for this model_type from production (if any).
+    2. Copy the new forecast CSV to models/production/forecasts_{model_type}.csv.
+    3. Copy the shared metrics.json from staging to models/production/metrics.json
+       (idempotent — both prophet and lstm deploy tasks do this; last-write wins,
+        which is fine since both come from the same Kaggle run).
+
+    Returns the production forecast CSV key.
+    Runs synchronously — call via asyncio.to_thread().
     """
     client = get_spaces_client()
     bucket = settings.DO_SPACES_BUCKET
 
-    production_key = staging_key.replace("models/staging/", "models/production/", 1)
+    # Extract model_type and run_yearmonth from staging key
+    # e.g. "models/staging/2026-05/prophet/forecasts.csv"
+    staging_parts  = staging_key.split("/")
+    model_type     = staging_parts[3] if len(staging_parts) > 3 else None
+    run_yearmonth  = staging_parts[2] if len(staging_parts) > 2 else None
 
-    # Extract the model_type from the key path
-    # e.g. "models/staging/2026-05/prophet/forecasts.csv" → "prophet"
-    staging_parts = staging_key.split("/")
-    model_type = staging_parts[3] if len(staging_parts) > 3 else None
+    # Flat production key: models/production/forecasts_{model_type}.csv
+    production_forecast_key = f"models/production/forecasts_{model_type}.csv"
 
-    # ── Step 1: Delete old production files for this model_type ──────────────
-    if model_type:
-        paginator = client.get_paginator("list_objects_v2")
-        old_keys = []
-        for page in paginator.paginate(Bucket=bucket, Prefix="models/production/"):
-            for obj in page.get("Contents", []):
-                # Match files belonging to the same model_type across any run month
-                # e.g. models/production/2026-04/prophet/* should be deleted
-                # when deploying models/staging/2026-05/prophet/forecasts.csv
-                obj_parts = obj["Key"].split("/")
-                if len(obj_parts) > 3 and obj_parts[3] == model_type:
-                    old_keys.append(obj["Key"])
-        if old_keys:
-            client.delete_objects(
-                Bucket=bucket,
-                Delete={"Objects": [{"Key": k} for k in old_keys]},
-            )
-            logger.info(
-                "_deploy_to_production: deleted %d old production files for %s",
-                len(old_keys), model_type,
-            )
+    # ── Step 1: Delete old forecast CSV for this model_type ──────────────────
+    try:
+        client.delete_object(Bucket=bucket, Key=production_forecast_key)
+        logger.info("_deploy_to_production: deleted old %s", production_forecast_key)
+    except ClientError:
+        pass  # didn't exist, that's fine
 
-    # ── Step 2: Copy forecast CSV ────────────────────────────────────────────
+    # ── Step 2: Copy forecast CSV to flat production path ────────────────────
     try:
         client.copy_object(
             Bucket=bucket,
             CopySource={"Bucket": bucket, "Key": staging_key},
-            Key=production_key,
+            Key=production_forecast_key,
+        )
+        logger.info(
+            "_deploy_to_production: %s -> %s", staging_key, production_forecast_key
         )
     except ClientError as exc:
         logger.error("DO Spaces copy failed: %s", exc)
-        raise RuntimeError(f"Failed to copy forecast CSV to production: {exc.response['Error']['Code']}")
-
-    # ── Step 3: Copy metadata.json if it exists alongside the forecast CSV ──
-    staging_dir = staging_key.rsplit("/", 1)[0]  # e.g. models/staging/2026-05/prophet
-    metadata_staging_key = f"{staging_dir}/metadata.json"
-    metadata_prod_key = metadata_staging_key.replace("models/staging/", "models/production/", 1)
-    try:
-        client.copy_object(
-            Bucket=bucket,
-            CopySource={"Bucket": bucket, "Key": metadata_staging_key},
-            Key=metadata_prod_key,
+        raise RuntimeError(
+            f"Failed to copy forecast CSV to production: {exc.response['Error']['Code']}"
         )
-        logger.info("_deploy_to_production: copied metadata.json to %s", metadata_prod_key)
-    except ClientError:
-        logger.info("_deploy_to_production: no metadata.json found at %s (skipped)", metadata_staging_key)
 
-    return production_key
+    # ── Step 3: Copy shared metrics.json (idempotent) ────────────────────────
+    if run_yearmonth:
+        metrics_staging_key = f"models/staging/{run_yearmonth}/metrics.json"
+        metrics_prod_key    = "models/production/metrics.json"
+        try:
+            client.copy_object(
+                Bucket=bucket,
+                CopySource={"Bucket": bucket, "Key": metrics_staging_key},
+                Key=metrics_prod_key,
+            )
+            logger.info(
+                "_deploy_to_production: %s -> %s", metrics_staging_key, metrics_prod_key
+            )
+        except ClientError:
+            logger.warning(
+                "_deploy_to_production: no metrics.json at %s (skipped)", metrics_staging_key
+            )
+
+    return production_forecast_key
 
 
 async def _do_deploy(run_id: str, run: dict, admin_email: str, svc: Any) -> dict[str, Any]:
