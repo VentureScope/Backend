@@ -142,9 +142,9 @@ class SupabaseService:
         offset = (page - 1) * per_page
         params.extend([per_page, offset])
         rows_sql = f"""
-            SELECT run_id, dag_id, model_type, status, accuracy, f1_score,
-                   auc_roc, record_count, months_covered, model_size_bytes,
-                   staging_pkl_key, class_balance,
+            SELECT run_id, dag_id, model_type, run_yearmonth, status,
+                   accuracy, f1_score, auc_roc, record_count, months_covered,
+                   model_size_bytes, staging_pkl_key, class_balance,
                    created_at, deployed_at, deployed_by,
                    notification_sent_at
             FROM ml_training_runs
