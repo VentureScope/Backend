@@ -871,16 +871,24 @@ class TestMLDeploy:
         svc.get_ml_training_run = AsyncMock(return_value=run)
         svc.update_ml_training_run_status = AsyncMock()
         svc.supersede_other_runs = AsyncMock()
+        # Bundle pre-flight check queries the pool for a deployed partner model;
+        # default to "no partner deployed" so single-model deploys aren't blocked.
+        pool = MagicMock()
+        pool.fetchrow = AsyncMock(return_value=None)
+        pool.fetchval = AsyncMock(return_value=0)
+        svc._get_pool_direct = AsyncMock(return_value=pool)
         return svc
 
-    async def test_deploy_awaiting_review_run_succeeds(
+    async def test_deploy_run_without_forecast_key_returns_400(
         self, client: AsyncClient, authenticated_admin: dict
     ):
+        """A run with no staging_forecast_key cannot be deployed."""
         run = {
             "run_id": "run-deploy-001",
             "model_type": "prophet",
             "status": "awaiting_review",
-            "staging_pkl_key": "",  # empty — skips DO Spaces copy
+            "run_yearmonth": "2026-05",
+            "staging_forecast_key": "",  # empty — rejected
         }
 
         with patch("app.api.admin_ml.get_supabase_service", return_value=self._supabase_with_run(run)):
@@ -889,16 +897,13 @@ class TestMLDeploy:
                 headers=authenticated_admin["headers"],
             )
 
-        assert response.status_code == 200
-        data = response.json()
-        assert data["run_id"] == "run-deploy-001"
-        assert data["deployed_by"] == authenticated_admin["email"]
-        assert "deployed_at" in data
+        assert response.status_code == 400
+        assert "forecast" in response.json()["detail"].lower()
 
     async def test_deploy_already_deployed_returns_400(
         self, client: AsyncClient, authenticated_admin: dict
     ):
-        run = {"run_id": "run-already", "model_type": "prophet", "status": "deployed", "staging_pkl_key": ""}
+        run = {"run_id": "run-already", "model_type": "prophet", "status": "deployed", "run_yearmonth": "2026-05", "staging_forecast_key": ""}
 
         with patch("app.api.admin_ml.get_supabase_service", return_value=self._supabase_with_run(run)):
             response = await client.post(
@@ -921,20 +926,22 @@ class TestMLDeploy:
             )
         assert response.status_code == 404
 
-    async def test_deploy_copies_model_to_production(
+    async def test_deploy_copies_forecast_to_production(
         self, client: AsyncClient, authenticated_admin: dict
     ):
-        """When staging_pkl_key is set, boto3 copy_object should be called."""
+        """When staging_forecast_key is set, the forecast CSV is copied to the
+        flat production path models/production/{ym}/forecasts_{model}.csv."""
         run = {
             "run_id": "run-with-key",
             "model_type": "prophet",
             "status": "awaiting_review",
-            "staging_pkl_key": "models/staging/prophet_20260518.pkl",
+            "run_yearmonth": "2026-05",
+            "staging_forecast_key": "models/staging/2026-05/prophet/forecasts.csv",
         }
 
         with patch("app.api.admin_ml.get_supabase_service", return_value=self._supabase_with_run(run)), \
              patch("app.api.admin_ml.settings") as mock_settings, \
-             patch("app.api.admin_ml._get_spaces_client") as mock_client_fn:
+             patch("app.api.admin_ml.get_spaces_client") as mock_client_fn:
 
             mock_settings.DO_SPACES_BUCKET = "venturescope-bucket"
             mock_settings.DO_SPACES_ENDPOINT = "https://lon1.digitaloceanspaces.com"
@@ -944,7 +951,13 @@ class TestMLDeploy:
             mock_settings.PIPELINE_WEBHOOK_SECRET = PIPELINE_SECRET
 
             mock_s3 = MagicMock()
+            mock_s3.head_object = MagicMock()  # pre-flight: source exists
             mock_s3.copy_object = MagicMock()
+            mock_s3.delete_objects = MagicMock()
+            # paginator returns no existing production files to wipe
+            mock_paginator = MagicMock()
+            mock_paginator.paginate.return_value = []
+            mock_s3.get_paginator.return_value = mock_paginator
             mock_client_fn.return_value = mock_s3
 
             response = await client.post(
@@ -953,9 +966,9 @@ class TestMLDeploy:
             )
 
         assert response.status_code == 200
-        mock_s3.copy_object.assert_called_once()
-        call_kwargs = mock_s3.copy_object.call_args[1]
-        assert call_kwargs["Key"] == "models/production/prophet_20260518.pkl"
+        # forecast CSV copied to the flat production path
+        copied_keys = [c.kwargs["Key"] for c in mock_s3.copy_object.call_args_list]
+        assert "models/production/2026-05/forecasts_prophet.csv" in copied_keys
 
     async def test_non_admin_gets_403(
         self, client: AsyncClient, authenticated_user: dict
@@ -1143,12 +1156,12 @@ class TestSystemStorage:
         mock_paginator.paginate.side_effect = [
             # staging call
             iter([{"Contents": [
-                {"Key": "models/staging/p.pkl", "Size": 500000,
+                {"Key": "models/staging/2026-05/prophet/forecasts.csv", "Size": 500000,
                  "LastModified": datetime(2026, 5, 18, tzinfo=timezone.utc)}
             ]}]),
             # production call
             iter([{"Contents": [
-                {"Key": "models/production/p.pkl", "Size": 500000,
+                {"Key": "models/production/2026-05/forecasts_prophet.csv", "Size": 500000,
                  "LastModified": datetime(2026, 5, 17, tzinfo=timezone.utc)}
             ]}]),
         ]
@@ -1156,7 +1169,7 @@ class TestSystemStorage:
         mock_s3.get_paginator.return_value = mock_paginator
 
         with patch("app.api.admin_system.settings") as mock_settings, \
-             patch("app.api.admin_system._get_spaces_client", return_value=mock_s3):
+             patch("app.api.admin_system.get_spaces_client", return_value=mock_s3):
 
             mock_settings.DO_SPACES_BUCKET = "vs-bucket"
             mock_settings.DO_SPACES_ENDPOINT = "https://lon1.digitaloceanspaces.com"
