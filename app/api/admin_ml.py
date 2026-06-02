@@ -91,6 +91,37 @@ def _deploy_to_production_sync(staging_key: str) -> str:
     model_type    = staging_parts[3] if len(staging_parts) > 3 else None
     run_yearmonth = staging_parts[2] if len(staging_parts) > 2 else None
 
+    # Normalize the source key: staging_pkl_key historically pointed at
+    # model.pkl files that no longer exist. Always resolve to the canonical
+    # forecasts.csv for this model/run regardless of what the DB stored.
+    canonical_key = (
+        f"models/staging/{run_yearmonth}/{model_type}/forecasts.csv"
+        if run_yearmonth and model_type
+        else staging_key
+    )
+    source_key = staging_key
+    if not staging_key.endswith("forecasts.csv"):
+        source_key = canonical_key
+
+    # ── Pre-flight: verify the source forecast CSV exists BEFORE wiping prod ──
+    # This prevents a bad/stale key from emptying production with nothing to
+    # put back. Try the stored key, then fall back to the canonical path.
+    resolved_key = None
+    for candidate in (source_key, canonical_key):
+        try:
+            client.head_object(Bucket=bucket, Key=candidate)
+            resolved_key = candidate
+            break
+        except ClientError:
+            continue
+    if not resolved_key:
+        raise RuntimeError(
+            f"Forecast CSV not found in staging for {model_type} ({run_yearmonth}). "
+            f"Tried '{source_key}' and '{canonical_key}'. "
+            f"The training run's staging artifacts may have been deleted — "
+            f"re-run the training pipeline for this instance."
+        )
+
     production_forecast_key = f"models/production/{run_yearmonth}/forecasts_{model_type}.csv"
 
     # ── Step 1: Wipe models/production/ entirely so only this run remains ────
@@ -111,10 +142,10 @@ def _deploy_to_production_sync(staging_key: str) -> str:
     try:
         client.copy_object(
             Bucket=bucket,
-            CopySource={"Bucket": bucket, "Key": staging_key},
+            CopySource={"Bucket": bucket, "Key": resolved_key},
             Key=production_forecast_key,
         )
-        logger.info("_deploy_to_production: %s -> %s", staging_key, production_forecast_key)
+        logger.info("_deploy_to_production: %s -> %s", resolved_key, production_forecast_key)
     except ClientError as exc:
         logger.error("DO Spaces copy failed: %s", exc)
         raise RuntimeError(
