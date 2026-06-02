@@ -64,29 +64,84 @@ def _verify_pipeline_hmac(body: bytes, signature_header: str | None) -> None:
         raise HTTPException(status_code=401, detail="Invalid pipeline webhook signature")
 
 
-def _push_forecast_to_production_sync(staging_key: str) -> str:
+def _deploy_to_production_sync(staging_key: str) -> str:
     """
-    Copy a forecast CSV from models/staging/ → models/production/ in DO Spaces.
+    Promote a model's staging artifacts to production in DO Spaces:
+    1. Delete any existing production files for the SAME model_type
+       (e.g. all files under models/production/*/prophet/) to prevent
+       stale runs from accumulating and inflating the admin file count.
+    2. Copy the forecast CSV from staging to production.
+    3. Copy the metadata.json alongside it (contains metrics, used by the
+       admin dashboard — Kaggle outputs this as metrics.json, the pipeline
+       splits it per-model into metadata.json in staging).
+
     Returns the production key. Runs synchronously — call via asyncio.to_thread().
     """
-    production_key = staging_key.replace("models/staging/", "models/production/", 1)
     client = get_spaces_client()
+    bucket = settings.DO_SPACES_BUCKET
+
+    production_key = staging_key.replace("models/staging/", "models/production/", 1)
+
+    # Extract the model_type from the key path
+    # e.g. "models/staging/2026-05/prophet/forecasts.csv" → "prophet"
+    staging_parts = staging_key.split("/")
+    model_type = staging_parts[3] if len(staging_parts) > 3 else None
+
+    # ── Step 1: Delete old production files for this model_type ──────────────
+    if model_type:
+        paginator = client.get_paginator("list_objects_v2")
+        old_keys = []
+        for page in paginator.paginate(Bucket=bucket, Prefix="models/production/"):
+            for obj in page.get("Contents", []):
+                # Match files belonging to the same model_type across any run month
+                # e.g. models/production/2026-04/prophet/* should be deleted
+                # when deploying models/staging/2026-05/prophet/forecasts.csv
+                obj_parts = obj["Key"].split("/")
+                if len(obj_parts) > 3 and obj_parts[3] == model_type:
+                    old_keys.append(obj["Key"])
+        if old_keys:
+            client.delete_objects(
+                Bucket=bucket,
+                Delete={"Objects": [{"Key": k} for k in old_keys]},
+            )
+            logger.info(
+                "_deploy_to_production: deleted %d old production files for %s",
+                len(old_keys), model_type,
+            )
+
+    # ── Step 2: Copy forecast CSV ────────────────────────────────────────────
     try:
         client.copy_object(
-            Bucket=settings.DO_SPACES_BUCKET,
-            CopySource={"Bucket": settings.DO_SPACES_BUCKET, "Key": staging_key},
+            Bucket=bucket,
+            CopySource={"Bucket": bucket, "Key": staging_key},
             Key=production_key,
         )
     except ClientError as exc:
         logger.error("DO Spaces copy failed: %s", exc)
-        raise RuntimeError(f"Failed to copy forecast CSV to production in DO Spaces: {exc.response['Error']['Code']}")
+        raise RuntimeError(f"Failed to copy forecast CSV to production: {exc.response['Error']['Code']}")
+
+    # ── Step 3: Copy metadata.json if it exists alongside the forecast CSV ──
+    staging_dir = staging_key.rsplit("/", 1)[0]  # e.g. models/staging/2026-05/prophet
+    metadata_staging_key = f"{staging_dir}/metadata.json"
+    metadata_prod_key = metadata_staging_key.replace("models/staging/", "models/production/", 1)
+    try:
+        client.copy_object(
+            Bucket=bucket,
+            CopySource={"Bucket": bucket, "Key": metadata_staging_key},
+            Key=metadata_prod_key,
+        )
+        logger.info("_deploy_to_production: copied metadata.json to %s", metadata_prod_key)
+    except ClientError:
+        logger.info("_deploy_to_production: no metadata.json found at %s (skipped)", metadata_staging_key)
+
     return production_key
 
 
 async def _do_deploy(run_id: str, run: dict, admin_email: str, svc: Any) -> dict[str, Any]:
     """
     Shared deploy logic used by both deploy (awaiting_review) and redeploy (superseded).
-    Copies staging forecast CSV to production, marks run as deployed, supersedes others.
+    Copies staging forecast CSV + metadata to production (wiping old production files first),
+    marks run as deployed, supersedes others.
     Returns the response dict (may include a warning key).
     """
     staging_key = run.get("staging_pkl_key", "")
@@ -98,7 +153,7 @@ async def _do_deploy(run_id: str, run: dict, admin_email: str, svc: Any) -> dict
     if not settings.DO_SPACES_BUCKET or not settings.DO_SPACES_ENDPOINT:
         raise HTTPException(status_code=503, detail="DO Spaces is not configured on this server.")
     try:
-        await asyncio.to_thread(_push_forecast_to_production_sync, staging_key)
+        await asyncio.to_thread(_deploy_to_production_sync, staging_key)
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc))
 
