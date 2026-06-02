@@ -67,31 +67,39 @@ class JobRepository:
         result = await self.db.execute(stmt)
         return result.scalar() or 0
 
-    async def get_in_demand_skills(self, limit: int = 20) -> list[dict]:
+    async def get_in_demand_skills(self, limit: int = 20, period_days: int = 90) -> list[dict]:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=period_days)
         stmt = text("""
             SELECT skill, COUNT(*) AS demand
             FROM jobs,
-            jsonb_array_elements_text(skills::jsonb) AS skill
+            jsonb_array_elements_text(skills) AS skill
             WHERE skills IS NOT NULL
+              AND posted_date >= :cutoff
             GROUP BY skill
             ORDER BY demand DESC
             LIMIT :limit
         """)
-        result = await self.db.execute(stmt, {"limit": limit})
+        result = await self.db.execute(stmt, {"limit": limit, "cutoff": cutoff})
         return [{"skill": row.skill, "demand": row.demand} for row in result.all()]
 
-    async def get_stats(self) -> dict:
-        total = await self.db.execute(select(func.count(Job.id)))
+    async def get_stats(self, period_days: int = 90) -> dict:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=period_days)
+        total = await self.db.execute(
+            select(func.count(Job.id)).where(Job.posted_date >= cutoff)
+        )
         companies = await self.db.execute(
-            select(func.count(func.distinct(Job.company_name)))
+            select(func.count(func.distinct(Job.company_name))).where(Job.posted_date >= cutoff)
         )
         categories = await self.db.execute(
             select(func.count(func.distinct(Job.normalized_title))).where(
-                Job.normalized_title.isnot(None)
+                Job.normalized_title.isnot(None),
+                Job.posted_date >= cutoff,
             )
         )
         dates = await self.db.execute(
-            select(func.min(Job.posted_date), func.max(Job.posted_date))
+            select(func.min(Job.posted_date), func.max(Job.posted_date)).where(
+                Job.posted_date >= cutoff
+            )
         )
         min_date, max_date = dates.one()
         return {

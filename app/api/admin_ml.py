@@ -64,9 +64,9 @@ def _verify_pipeline_hmac(body: bytes, signature_header: str | None) -> None:
         raise HTTPException(status_code=401, detail="Invalid pipeline webhook signature")
 
 
-def _push_model_to_production_sync(staging_key: str) -> str:
+def _push_forecast_to_production_sync(staging_key: str) -> str:
     """
-    Copy a model file from models/staging/ → models/production/ in DO Spaces.
+    Copy a forecast CSV from models/staging/ → models/production/ in DO Spaces.
     Returns the production key. Runs synchronously — call via asyncio.to_thread().
     """
     production_key = staging_key.replace("models/staging/", "models/production/", 1)
@@ -79,8 +79,72 @@ def _push_model_to_production_sync(staging_key: str) -> str:
         )
     except ClientError as exc:
         logger.error("DO Spaces copy failed: %s", exc)
-        raise RuntimeError(f"Failed to copy model to production in DO Spaces: {exc.response['Error']['Code']}")
+        raise RuntimeError(f"Failed to copy forecast CSV to production in DO Spaces: {exc.response['Error']['Code']}")
     return production_key
+
+
+async def _do_deploy(run_id: str, run: dict, admin_email: str, svc: Any) -> dict[str, Any]:
+    """
+    Shared deploy logic used by both deploy (awaiting_review) and redeploy (superseded).
+    Copies staging forecast CSV to production, marks run as deployed, supersedes others.
+    Returns the response dict (may include a warning key).
+    """
+    staging_key = run.get("staging_pkl_key", "")
+    if not staging_key:
+        raise HTTPException(
+            status_code=400,
+            detail="This training run has no staging forecast CSV (staging_pkl_key is empty) — cannot deploy.",
+        )
+    if not settings.DO_SPACES_BUCKET or not settings.DO_SPACES_ENDPOINT:
+        raise HTTPException(status_code=503, detail="DO Spaces is not configured on this server.")
+    try:
+        await asyncio.to_thread(_push_forecast_to_production_sync, staging_key)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+    now = datetime.now(timezone.utc)
+    try:
+        await svc.update_ml_training_run_status(
+            run_id,
+            status="deployed",
+            deployed_at=now,
+            deployed_by=admin_email,
+        )
+        model_type = run.get("model_type", "")
+        if model_type:
+            await svc.supersede_other_runs(run_id, model_type)
+    except Exception as exc:
+        logger.error("_do_deploy status update error: %s", exc)
+        raise HTTPException(status_code=502, detail=str(exc))
+
+    # Warn if the partner model type is not deployed (ensemble needs both)
+    warning = None
+    model_type = run.get("model_type", "")
+    if model_type in ("prophet", "lstm"):
+        other_model = "lstm" if model_type == "prophet" else "prophet"
+        try:
+            pool = await svc._get_pool_direct()
+            other_deployed = await pool.fetchval(
+                "SELECT COUNT(*) FROM ml_training_runs WHERE model_type = $1 AND status = 'deployed'",
+                other_model,
+            )
+        except Exception:
+            other_deployed = None
+        if other_deployed is not None and other_deployed == 0:
+            warning = (
+                f"Only '{model_type}' is deployed. "
+                f"Deploy a '{other_model}' run too so the ensemble averages both models."
+            )
+
+    response: dict[str, Any] = {
+        "message": "Model deployed successfully",
+        "run_id": run_id,
+        "deployed_by": admin_email,
+        "deployed_at": now.isoformat(),
+    }
+    if warning:
+        response["warning"] = warning
+    return response
 
 
 # ---------------------------------------------------------------------------
@@ -140,14 +204,12 @@ async def deploy_ml_run(
     current_admin: Annotated[User, Depends(get_current_admin_user)],
 ) -> dict[str, Any]:
     """
-    Deploy a training run:
-    1. Validate run exists and is in 'awaiting_review' status
-    2. Copy model from models/staging/ → models/production/ in DO Spaces
-    3. Set status='deployed', deployed_at, deployed_by on the run
-    4. Supersede all other deployed runs for the same model_type
+    Deploy a training run that is in 'awaiting_review' status:
+    1. Copy forecast CSV from models/staging/ → models/production/ in DO Spaces
+    2. Set status='deployed', deployed_at, deployed_by on the run
+    3. Supersede all other deployed runs for the same model_type
     """
     svc = get_supabase_service()
-
     try:
         run = await svc.get_ml_training_run(run_id)
     except Exception as exc:
@@ -155,77 +217,49 @@ async def deploy_ml_run(
 
     if not run:
         raise HTTPException(status_code=404, detail="Training run not found")
-
     if run.get("status") != "awaiting_review":
         raise HTTPException(
             status_code=400,
-            detail=f"Run is in status '{run['status']}' — only awaiting_review runs can be deployed.",
+            detail=f"Run is in status '{run['status']}' — only awaiting_review runs can be deployed. Use /redeploy for superseded runs.",
         )
 
-    # Push model file to production in DO Spaces
-    staging_key = run.get("staging_pkl_key", "")
-    if not staging_key:
+    logger.info("Admin %s deploying run %s (model_type=%s)", current_admin.email, run_id, run.get("model_type"))
+    return await _do_deploy(run_id, run, current_admin.email, svc)
+
+
+@router.post("/ml/redeploy/{run_id}", status_code=200)
+async def redeploy_ml_run(
+    run_id: str,
+    current_admin: Annotated[User, Depends(get_current_admin_user)],
+) -> dict[str, Any]:
+    """
+    Redeploy a previously superseded training run.
+    Useful for rolling back to an older model or reactivating a run that was
+    superseded by a newer one that turned out to be worse.
+
+    Same mechanics as deploy but accepts 'superseded' status instead of
+    'awaiting_review'. The previously deployed run for the same model_type
+    will be superseded.
+    """
+    svc = get_supabase_service()
+    try:
+        run = await svc.get_ml_training_run(run_id)
+    except Exception as exc:
+        logger.error("redeploy_ml_run fetch error: %s", exc)
+        raise HTTPException(status_code=502, detail=f"Could not fetch training run: {exc}")
+
+    if not run:
+        raise HTTPException(status_code=404, detail="Training run not found")
+    if run.get("status") != "superseded":
         raise HTTPException(
             status_code=400,
-            detail="This training run has no staging artifact (staging_pkl_key is empty) — cannot deploy.",
+            detail=f"Run is in status '{run['status']}' — only superseded runs can be redeployed. Use /deploy for awaiting_review runs.",
         )
-    if not settings.DO_SPACES_BUCKET or not settings.DO_SPACES_ENDPOINT:
-        raise HTTPException(status_code=503, detail="DO Spaces is not configured on this server.")
-    try:
-        await asyncio.to_thread(_push_model_to_production_sync, staging_key)
-    except RuntimeError as exc:
-        raise HTTPException(status_code=502, detail=str(exc))
 
-    now = datetime.now(timezone.utc)
-    now_iso = now.isoformat()
-    admin_email = current_admin.email
-
-    try:
-        await svc.update_ml_training_run_status(
-            run_id,
-            status="deployed",
-            deployed_at=now,
-            deployed_by=admin_email,
-        )
-        model_type = run.get("model_type", "")
-        if model_type:
-            await svc.supersede_other_runs(run_id, model_type)
-    except Exception as exc:
-        logger.error("deploy_ml_run status update error: %s", exc)
-        raise HTTPException(status_code=502, detail=str(exc))
-
-    # Check if the other model type is also deployed — warn if not
-    # (ensemble view only averages when both prophet + lstm are deployed)
-    # Only meaningful for the two known ensemble model types.
-    warning = None
-    if model_type in ("prophet", "lstm"):
-        other_model = "lstm" if model_type == "prophet" else "prophet"
-        try:
-            pool = await svc._get_pool_direct()
-            other_deployed = await pool.fetchval(
-                "SELECT COUNT(*) FROM ml_training_runs WHERE model_type = $1 AND status = 'deployed'",
-                other_model,
-            )
-        except Exception:
-            other_deployed = None
-
-        if other_deployed is not None and other_deployed == 0:
-            warning = (
-                f"Only '{model_type}' is deployed. "
-                f"Deploy a '{other_model}' run too so the ensemble averages both models. "
-                f"Until then, /api/jobs/forecasts serves {model_type} predictions only."
-            )
-
-    logger.info("Admin %s deployed run %s (model_type=%s)", admin_email, run_id, model_type)
-    response = {
-        "message": "Model deployed successfully",
-        "run_id": run_id,
-        "deployed_by": admin_email,
-        "deployed_at": now_iso,
-    }
-    if warning:
-        response["warning"] = warning
-    return response
+    logger.info("Admin %s redeploying superseded run %s (model_type=%s)", current_admin.email, run_id, run.get("model_type"))
+    result = await _do_deploy(run_id, run, current_admin.email, svc)
+    result["message"] = "Model redeployed successfully"
+    return result
 
 
 # ---------------------------------------------------------------------------

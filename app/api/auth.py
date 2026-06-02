@@ -229,6 +229,11 @@ async def logout(
     )
     await db.commit()
 
+    # Evict auth cache immediately so the revoked token is rejected on the
+    # very next request rather than waiting for the 10-second TTL.
+    from app.api.deps import invalidate_auth_cache
+    invalidate_auth_cache(token_result.payload.jti, token_result.payload.sub)
+
     # Clear MFA/AAL2 status so they must re-verify on next login,
     # UNLESS they checked "Remember Me" during login.
     if not token_result.payload.remember:
