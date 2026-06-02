@@ -68,17 +68,16 @@ def _deploy_to_production_sync(staging_key: str) -> str:
     """
     Promote a model's staging artifacts to production in DO Spaces.
 
-    New flat production layout (mirrors Kaggle output structure):
-        models/production/forecasts_prophet.csv   ← from models/staging/YYYY-MM/prophet/forecasts.csv
-        models/production/forecasts_lstm.csv      ← from models/staging/YYYY-MM/lstm/forecasts.csv
-        models/production/metrics.json            ← from models/staging/YYYY-MM/metrics.json
+    Production layout (one YYYY-MM folder, always exactly 3 files):
+        models/production/YYYY-MM/forecasts_prophet.csv
+        models/production/YYYY-MM/forecasts_lstm.csv
+        models/production/YYYY-MM/metrics.json
 
     Steps:
-    1. Delete the old forecast CSV for this model_type from production (if any).
-    2. Copy the new forecast CSV to models/production/forecasts_{model_type}.csv.
-    3. Copy the shared metrics.json from staging to models/production/metrics.json
-       (idempotent — both prophet and lstm deploy tasks do this; last-write wins,
-        which is fine since both come from the same Kaggle run).
+    1. Wipe ALL of models/production/ — only one run should ever be in production.
+    2. Copy forecast CSV to models/production/YYYY-MM/forecasts_{model_type}.csv.
+    3. Copy shared metrics.json to models/production/YYYY-MM/metrics.json
+       (idempotent — both prophet and lstm deploy tasks do this; last-write wins).
 
     Returns the production forecast CSV key.
     Runs synchronously — call via asyncio.to_thread().
@@ -88,30 +87,34 @@ def _deploy_to_production_sync(staging_key: str) -> str:
 
     # Extract model_type and run_yearmonth from staging key
     # e.g. "models/staging/2026-05/prophet/forecasts.csv"
-    staging_parts  = staging_key.split("/")
-    model_type     = staging_parts[3] if len(staging_parts) > 3 else None
-    run_yearmonth  = staging_parts[2] if len(staging_parts) > 2 else None
+    staging_parts = staging_key.split("/")
+    model_type    = staging_parts[3] if len(staging_parts) > 3 else None
+    run_yearmonth = staging_parts[2] if len(staging_parts) > 2 else None
 
-    # Flat production key: models/production/forecasts_{model_type}.csv
-    production_forecast_key = f"models/production/forecasts_{model_type}.csv"
+    production_forecast_key = f"models/production/{run_yearmonth}/forecasts_{model_type}.csv"
 
-    # ── Step 1: Delete old forecast CSV for this model_type ──────────────────
-    try:
-        client.delete_object(Bucket=bucket, Key=production_forecast_key)
-        logger.info("_deploy_to_production: deleted old %s", production_forecast_key)
-    except ClientError:
-        pass  # didn't exist, that's fine
+    # ── Step 1: Wipe models/production/ entirely so only this run remains ────
+    paginator = client.get_paginator("list_objects_v2")
+    old_keys = [
+        obj["Key"]
+        for page in paginator.paginate(Bucket=bucket, Prefix="models/production/")
+        for obj in page.get("Contents", [])
+    ]
+    if old_keys:
+        client.delete_objects(
+            Bucket=bucket,
+            Delete={"Objects": [{"Key": k} for k in old_keys]},
+        )
+        logger.info("_deploy_to_production: wiped %d old production files", len(old_keys))
 
-    # ── Step 2: Copy forecast CSV to flat production path ────────────────────
+    # ── Step 2: Copy forecast CSV ─────────────────────────────────────────────
     try:
         client.copy_object(
             Bucket=bucket,
             CopySource={"Bucket": bucket, "Key": staging_key},
             Key=production_forecast_key,
         )
-        logger.info(
-            "_deploy_to_production: %s -> %s", staging_key, production_forecast_key
-        )
+        logger.info("_deploy_to_production: %s -> %s", staging_key, production_forecast_key)
     except ClientError as exc:
         logger.error("DO Spaces copy failed: %s", exc)
         raise RuntimeError(
@@ -121,16 +124,14 @@ def _deploy_to_production_sync(staging_key: str) -> str:
     # ── Step 3: Copy shared metrics.json (idempotent) ────────────────────────
     if run_yearmonth:
         metrics_staging_key = f"models/staging/{run_yearmonth}/metrics.json"
-        metrics_prod_key    = "models/production/metrics.json"
+        metrics_prod_key    = f"models/production/{run_yearmonth}/metrics.json"
         try:
             client.copy_object(
                 Bucket=bucket,
                 CopySource={"Bucket": bucket, "Key": metrics_staging_key},
                 Key=metrics_prod_key,
             )
-            logger.info(
-                "_deploy_to_production: %s -> %s", metrics_staging_key, metrics_prod_key
-            )
+            logger.info("_deploy_to_production: %s -> %s", metrics_staging_key, metrics_prod_key)
         except ClientError:
             logger.warning(
                 "_deploy_to_production: no metrics.json at %s (skipped)", metrics_staging_key
