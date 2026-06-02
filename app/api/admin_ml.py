@@ -64,29 +64,87 @@ def _verify_pipeline_hmac(body: bytes, signature_header: str | None) -> None:
         raise HTTPException(status_code=401, detail="Invalid pipeline webhook signature")
 
 
-def _push_forecast_to_production_sync(staging_key: str) -> str:
+def _deploy_to_production_sync(staging_key: str) -> str:
     """
-    Copy a forecast CSV from models/staging/ → models/production/ in DO Spaces.
-    Returns the production key. Runs synchronously — call via asyncio.to_thread().
+    Promote a model's staging artifacts to production in DO Spaces.
+
+    Production layout (one YYYY-MM folder, always exactly 3 files):
+        models/production/YYYY-MM/forecasts_prophet.csv
+        models/production/YYYY-MM/forecasts_lstm.csv
+        models/production/YYYY-MM/metrics.json
+
+    Steps:
+    1. Wipe ALL of models/production/ — only one run should ever be in production.
+    2. Copy forecast CSV to models/production/YYYY-MM/forecasts_{model_type}.csv.
+    3. Copy shared metrics.json to models/production/YYYY-MM/metrics.json
+       (idempotent — both prophet and lstm deploy tasks do this; last-write wins).
+
+    Returns the production forecast CSV key.
+    Runs synchronously — call via asyncio.to_thread().
     """
-    production_key = staging_key.replace("models/staging/", "models/production/", 1)
     client = get_spaces_client()
+    bucket = settings.DO_SPACES_BUCKET
+
+    # Extract model_type and run_yearmonth from staging key
+    # e.g. "models/staging/2026-05/prophet/forecasts.csv"
+    staging_parts = staging_key.split("/")
+    model_type    = staging_parts[3] if len(staging_parts) > 3 else None
+    run_yearmonth = staging_parts[2] if len(staging_parts) > 2 else None
+
+    production_forecast_key = f"models/production/{run_yearmonth}/forecasts_{model_type}.csv"
+
+    # ── Step 1: Wipe models/production/ entirely so only this run remains ────
+    paginator = client.get_paginator("list_objects_v2")
+    old_keys = [
+        obj["Key"]
+        for page in paginator.paginate(Bucket=bucket, Prefix="models/production/")
+        for obj in page.get("Contents", [])
+    ]
+    if old_keys:
+        client.delete_objects(
+            Bucket=bucket,
+            Delete={"Objects": [{"Key": k} for k in old_keys]},
+        )
+        logger.info("_deploy_to_production: wiped %d old production files", len(old_keys))
+
+    # ── Step 2: Copy forecast CSV ─────────────────────────────────────────────
     try:
         client.copy_object(
-            Bucket=settings.DO_SPACES_BUCKET,
-            CopySource={"Bucket": settings.DO_SPACES_BUCKET, "Key": staging_key},
-            Key=production_key,
+            Bucket=bucket,
+            CopySource={"Bucket": bucket, "Key": staging_key},
+            Key=production_forecast_key,
         )
+        logger.info("_deploy_to_production: %s -> %s", staging_key, production_forecast_key)
     except ClientError as exc:
         logger.error("DO Spaces copy failed: %s", exc)
-        raise RuntimeError(f"Failed to copy forecast CSV to production in DO Spaces: {exc.response['Error']['Code']}")
-    return production_key
+        raise RuntimeError(
+            f"Failed to copy forecast CSV to production: {exc.response['Error']['Code']}"
+        )
+
+    # ── Step 3: Copy shared metrics.json (idempotent) ────────────────────────
+    if run_yearmonth:
+        metrics_staging_key = f"models/staging/{run_yearmonth}/metrics.json"
+        metrics_prod_key    = f"models/production/{run_yearmonth}/metrics.json"
+        try:
+            client.copy_object(
+                Bucket=bucket,
+                CopySource={"Bucket": bucket, "Key": metrics_staging_key},
+                Key=metrics_prod_key,
+            )
+            logger.info("_deploy_to_production: %s -> %s", metrics_staging_key, metrics_prod_key)
+        except ClientError:
+            logger.warning(
+                "_deploy_to_production: no metrics.json at %s (skipped)", metrics_staging_key
+            )
+
+    return production_forecast_key
 
 
 async def _do_deploy(run_id: str, run: dict, admin_email: str, svc: Any) -> dict[str, Any]:
     """
     Shared deploy logic used by both deploy (awaiting_review) and redeploy (superseded).
-    Copies staging forecast CSV to production, marks run as deployed, supersedes others.
+    Copies staging forecast CSV + metadata to production (wiping old production files first),
+    marks run as deployed, supersedes others.
     Returns the response dict (may include a warning key).
     """
     staging_key = run.get("staging_pkl_key", "")
@@ -98,7 +156,7 @@ async def _do_deploy(run_id: str, run: dict, admin_email: str, svc: Any) -> dict
     if not settings.DO_SPACES_BUCKET or not settings.DO_SPACES_ENDPOINT:
         raise HTTPException(status_code=503, detail="DO Spaces is not configured on this server.")
     try:
-        await asyncio.to_thread(_push_forecast_to_production_sync, staging_key)
+        await asyncio.to_thread(_deploy_to_production_sync, staging_key)
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc))
 

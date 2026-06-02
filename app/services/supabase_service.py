@@ -54,6 +54,7 @@ async def _get_pool() -> asyncpg.Pool:
             min_size=1,
             max_size=5,
             command_timeout=15,
+            max_inactive_connection_lifetime=60,  # recycle idle connections after 60s
         )
         logger.info("Supabase asyncpg pool created (min=1, max=5)")
         return _pool
@@ -66,6 +67,21 @@ async def close_pool() -> None:
         await _pool.close()
         _pool = None
         logger.info("Supabase asyncpg pool closed")
+
+
+async def _reset_pool() -> None:
+    """Close and reset the pool so the next call recreates it.
+    Called when a connection error suggests the pool is in a broken state."""
+    global _pool
+    if _pool:
+        try:
+            await _pool.close()
+        except Exception:
+            logger.exception(
+                "Failed to close asyncpg pool during reset; continuing with pool reset"
+            )
+        _pool = None
+        logger.warning("Supabase asyncpg pool reset due to connection error")
 
 
 # ---------------------------------------------------------------------------
@@ -142,12 +158,20 @@ class SupabaseService:
         }
 
     async def get_ml_training_run(self, run_id: str) -> dict[str, Any] | None:
-        """Return a single ml_training_runs row by run_id."""
-        pool = await _get_pool()
-        row = await pool.fetchrow(
-            "SELECT * FROM ml_training_runs WHERE run_id = $1", run_id
-        )
-        return dict(row) if row else None
+        """Return a single ml_training_runs row by run_id.
+        Retries once on connection error to handle stale pool connections."""
+        for attempt in range(2):
+            try:
+                pool = await _get_pool()
+                row = await pool.fetchrow(
+                    "SELECT * FROM ml_training_runs WHERE run_id = $1", run_id
+                )
+                return dict(row) if row else None
+            except (asyncpg.InterfaceError, asyncpg.ConnectionDoesNotExistError, OSError) as exc:
+                logger.warning("get_ml_training_run: connection error (attempt %d): %s", attempt + 1, exc)
+                await _reset_pool()
+                if attempt == 1:
+                    raise
 
     async def update_ml_training_run_status(
         self,

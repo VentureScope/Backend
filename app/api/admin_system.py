@@ -131,6 +131,19 @@ async def get_storage_health(
         asyncio.to_thread(_list_prefix, "models/production/"),
     )
 
+    def _count_runs(files: list[dict], prefix: str) -> int:
+        """Count unique YYYY-MM run folders under a prefix.
+        e.g. models/staging/2026-05/lstm/forecasts.csv → '2026-05'
+        """
+        folders = set()
+        for f in files:
+            # strip prefix, take the first path segment = YYYY-MM
+            relative = f["key"][len(prefix):]
+            segment = relative.split("/")[0]
+            if segment:
+                folders.add(segment)
+        return len(folders)
+
     all_files = staging_files + production_files
     total_bytes = sum(f["size_bytes"] for f in all_files)
     last_modified = max(
@@ -141,10 +154,12 @@ async def get_storage_health(
         "bucket": bucket,
         "staging": {
             "count": len(staging_files),
+            "runs": _count_runs(staging_files, "models/staging/"),
             "files": staging_files,
         },
         "production": {
             "count": len(production_files),
+            "runs": _count_runs(production_files, "models/production/"),
             "files": production_files,
         },
         "total_size_bytes": total_bytes,
