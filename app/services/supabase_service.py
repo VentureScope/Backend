@@ -218,6 +218,21 @@ class SupabaseService:
             run_id,
         )
 
+    async def supersede_all_deployed(self) -> int:
+        """Mark every currently-deployed run as superseded, regardless of
+        model_type or run_yearmonth. Used by bundle deploy to guarantee a
+        clean single-bundle production state before deploying the new pair.
+        Returns the number of rows superseded."""
+        pool = await _get_pool()
+        result = await pool.execute(
+            "UPDATE ml_training_runs SET status = 'superseded' WHERE status = 'deployed'"
+        )
+        # asyncpg returns a command tag like "UPDATE 3"
+        try:
+            return int(result.split()[-1])
+        except (AttributeError, ValueError, IndexError):
+            return 0
+
     # ------------------------------------------------------------------
     # Taxonomy / unmatched roles
     # ------------------------------------------------------------------

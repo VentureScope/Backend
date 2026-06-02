@@ -64,7 +64,7 @@ def _verify_pipeline_hmac(body: bytes, signature_header: str | None) -> None:
         raise HTTPException(status_code=401, detail="Invalid pipeline webhook signature")
 
 
-def _deploy_to_production_sync(staging_key: str) -> str:
+def _deploy_to_production_sync(staging_key: str, wipe: bool = True) -> str:
     """
     Promote a model's staging artifacts to production in DO Spaces.
 
@@ -74,7 +74,9 @@ def _deploy_to_production_sync(staging_key: str) -> str:
         models/production/YYYY-MM/metrics.json
 
     Steps:
-    1. Wipe ALL of models/production/ — only one run should ever be in production.
+    1. (if wipe) Wipe ALL of models/production/ — only one run should ever be
+       in production. When deploying a bundle, only the FIRST model wipes so
+       the second model's CSV isn't deleted right after it's written.
     2. Copy forecast CSV to models/production/YYYY-MM/forecasts_{model_type}.csv.
     3. Copy shared metrics.json to models/production/YYYY-MM/metrics.json
        (idempotent — both prophet and lstm deploy tasks do this; last-write wins).
@@ -125,18 +127,19 @@ def _deploy_to_production_sync(staging_key: str) -> str:
     production_forecast_key = f"models/production/{run_yearmonth}/forecasts_{model_type}.csv"
 
     # ── Step 1: Wipe models/production/ entirely so only this run remains ────
-    paginator = client.get_paginator("list_objects_v2")
-    old_keys = [
-        obj["Key"]
-        for page in paginator.paginate(Bucket=bucket, Prefix="models/production/")
-        for obj in page.get("Contents", [])
-    ]
-    if old_keys:
-        client.delete_objects(
-            Bucket=bucket,
-            Delete={"Objects": [{"Key": k} for k in old_keys]},
-        )
-        logger.info("_deploy_to_production: wiped %d old production files", len(old_keys))
+    if wipe:
+        paginator = client.get_paginator("list_objects_v2")
+        old_keys = [
+            obj["Key"]
+            for page in paginator.paginate(Bucket=bucket, Prefix="models/production/")
+            for obj in page.get("Contents", [])
+        ]
+        if old_keys:
+            client.delete_objects(
+                Bucket=bucket,
+                Delete={"Objects": [{"Key": k} for k in old_keys]},
+            )
+            logger.info("_deploy_to_production: wiped %d old production files", len(old_keys))
 
     # ── Step 2: Copy forecast CSV ─────────────────────────────────────────────
     try:
@@ -403,13 +406,15 @@ async def deploy_bundle(
     """
     svc = get_supabase_service()
 
-    # Fetch both runs for this training instance
+    # Fetch runs for this training instance, most recent first so the first
+    # row we see per model_type is the latest run.
     try:
         pool = await svc._get_pool_direct()
         rows = await pool.fetch(
             "SELECT run_id, model_type, status FROM ml_training_runs "
             "WHERE run_yearmonth = $1 AND model_type IN ('prophet', 'lstm') "
-            "AND status IN ('awaiting_review', 'superseded', 'deployed')",
+            "AND status IN ('awaiting_review', 'superseded', 'deployed') "
+            "ORDER BY created_at DESC",
             run_yearmonth,
         )
     except Exception as exc:
@@ -422,45 +427,63 @@ async def deploy_bundle(
             detail=f"No deployable runs found for training instance '{run_yearmonth}'.",
         )
 
-    # Only act on runs that are not already deployed
-    to_deploy = [dict(r) for r in rows if r["status"] in ("awaiting_review", "superseded")]
-    if not to_deploy:
-        return {
-            "message": f"Bundle '{run_yearmonth}' is already fully deployed.",
-            "run_yearmonth": run_yearmonth,
-            "deployed_runs": [],
-        }
+    # Pick exactly ONE run per model_type — the most recent (rows ordered DESC).
+    # This avoids deploying duplicate runs that share the same run_yearmonth
+    # (e.g. multiple manual reruns of the same month).
+    by_model: dict[str, dict] = {}
+    for r in rows:
+        mt = r["model_type"]
+        if mt not in by_model:
+            by_model[mt] = dict(r)
 
-    deployed_runs: list[str] = []
+    target_runs = list(by_model.values())
+
+    # Validate every target has a staging forecast CSV BEFORE any writes.
+    full_runs: dict[str, dict] = {}
+    for r in target_runs:
+        full = await svc.get_ml_training_run(r["run_id"])
+        if not full:
+            continue
+        if not full.get("staging_forecast_key"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Run '{r['run_id']}' has no staging forecast CSV — cannot deploy bundle.",
+            )
+        full_runs[r["run_id"]] = full
+
+    if not full_runs:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No deployable runs with artifacts found for instance '{run_yearmonth}'.",
+        )
+
     now = datetime.now(timezone.utc)
     admin_email = current_admin.email
 
-    for r in to_deploy:
-        run_id     = r["run_id"]
-        model_type = r["model_type"]
-        full_run   = await svc.get_ml_training_run(run_id)
-        if not full_run:
-            continue
+    # ── Step 1: Supersede ALL currently-deployed runs (every model_type,
+    #            every instance) so we never end up with a mixed bundle. ──────
+    try:
+        await svc.supersede_all_deployed()
+    except Exception as exc:
+        logger.error("deploy_bundle supersede_all error: %s", exc)
+        raise HTTPException(status_code=502, detail=str(exc))
 
-        staging_key = full_run.get("staging_forecast_key", "")
-        if not staging_key:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Run '{run_id}' has no staging forecast CSV — cannot deploy bundle.",
-            )
-
-        # Copy artifacts to production (skips the per-model mismatch guard)
+    # ── Step 2: Copy each model's artifacts to production ────────────────────
+    # _deploy_to_production_sync wipes models/production/ on the first call,
+    # so call it for every model in the bundle (each writes its own forecast
+    # CSV; metrics.json is shared/idempotent).
+    deployed_runs: list[str] = []
+    for run_id, full in full_runs.items():
+        staging_key = full["staging_forecast_key"]
         try:
-            await asyncio.to_thread(_deploy_to_production_sync, staging_key)
+            await asyncio.to_thread(_deploy_to_production_sync, staging_key, wipe=not deployed_runs)
         except RuntimeError as exc:
             raise HTTPException(status_code=502, detail=str(exc))
 
-        # Update DB status + supersede the previous run of this model_type
         try:
             await svc.update_ml_training_run_status(
                 run_id, status="deployed", deployed_at=now, deployed_by=admin_email,
             )
-            await svc.supersede_other_runs(run_id, model_type)
         except Exception as exc:
             logger.error("deploy_bundle status update error: %s", exc)
             raise HTTPException(status_code=502, detail=str(exc))
