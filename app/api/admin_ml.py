@@ -91,8 +91,8 @@ def _deploy_to_production_sync(staging_key: str) -> str:
     model_type    = staging_parts[3] if len(staging_parts) > 3 else None
     run_yearmonth = staging_parts[2] if len(staging_parts) > 2 else None
 
-    # Normalize the source key: staging_pkl_key historically pointed at
-    # model.pkl files that no longer exist. Always resolve to the canonical
+    # Normalize the source key: legacy rows historically pointed at
+    # model artifacts that no longer exist. Always resolve to the canonical
     # forecasts.csv for this model/run regardless of what the DB stored.
     canonical_key = (
         f"models/staging/{run_yearmonth}/{model_type}/forecasts.csv"
@@ -213,11 +213,11 @@ async def _do_deploy(run_id: str, run: dict, admin_email: str, svc: Any) -> dict
                     ),
                 )
 
-    staging_key = run.get("staging_pkl_key", "")
+    staging_key = run.get("staging_forecast_key", "")
     if not staging_key:
         raise HTTPException(
             status_code=400,
-            detail="This training run has no staging forecast CSV (staging_pkl_key is empty) — cannot deploy.",
+            detail="This training run has no staging forecast CSV (staging_forecast_key is empty) — cannot deploy.",
         )
     if not settings.DO_SPACES_BUCKET or not settings.DO_SPACES_ENDPOINT:
         raise HTTPException(status_code=503, detail="DO Spaces is not configured on this server.")
@@ -442,7 +442,7 @@ async def deploy_bundle(
         if not full_run:
             continue
 
-        staging_key = full_run.get("staging_pkl_key", "")
+        staging_key = full_run.get("staging_forecast_key", "")
         if not staging_key:
             raise HTTPException(
                 status_code=400,
