@@ -146,7 +146,42 @@ async def _do_deploy(run_id: str, run: dict, admin_email: str, svc: Any) -> dict
     Copies staging forecast CSV + metadata to production (wiping old production files first),
     marks run as deployed, supersedes others.
     Returns the response dict (may include a warning key).
+
+    Bundle constraint: both prophet and lstm must come from the same training
+    instance (same run_yearmonth). Deploying a model whose partner is already
+    deployed from a different run_yearmonth is rejected with 400 — it would
+    corrupt the shared metrics.json and produce an incoherent ensemble.
     """
+    model_type    = run.get("model_type", "")
+    run_yearmonth = run.get("run_yearmonth", "")
+
+    # ── Pre-flight: bundle consistency check (before any writes) ─────────────
+    if model_type in ("prophet", "lstm"):
+        other_model = "lstm" if model_type == "prophet" else "prophet"
+        try:
+            pool = await svc._get_pool_direct()
+            other_row = await pool.fetchrow(
+                "SELECT run_id, run_yearmonth FROM ml_training_runs "
+                "WHERE model_type = $1 AND status = 'deployed' LIMIT 1",
+                other_model,
+            )
+        except Exception:
+            other_row = None
+
+        if other_row and other_row["run_yearmonth"] and run_yearmonth:
+            if other_row["run_yearmonth"] != run_yearmonth:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Bundle mismatch: '{other_model}' is already deployed from training "
+                        f"instance '{other_row['run_yearmonth']}', but this '{model_type}' run "
+                        f"is from '{run_yearmonth}'. Both models must come from the same "
+                        f"training instance to keep the forecast bundle consistent. "
+                        f"Redeploy the '{other_model}' from '{run_yearmonth}' first, then "
+                        f"redeploy this run — or use the Redeploy action on both together."
+                    ),
+                )
+
     staging_key = run.get("staging_pkl_key", "")
     if not staging_key:
         raise HTTPException(
@@ -168,16 +203,14 @@ async def _do_deploy(run_id: str, run: dict, admin_email: str, svc: Any) -> dict
             deployed_at=now,
             deployed_by=admin_email,
         )
-        model_type = run.get("model_type", "")
         if model_type:
             await svc.supersede_other_runs(run_id, model_type)
     except Exception as exc:
         logger.error("_do_deploy status update error: %s", exc)
         raise HTTPException(status_code=502, detail=str(exc))
 
-    # Warn if the partner model type is not deployed (ensemble needs both)
+    # ── Post-deploy: warn if partner not yet deployed ─────────────────────────
     warning = None
-    model_type = run.get("model_type", "")
     if model_type in ("prophet", "lstm"):
         other_model = "lstm" if model_type == "prophet" else "prophet"
         try:
@@ -191,7 +224,8 @@ async def _do_deploy(run_id: str, run: dict, admin_email: str, svc: Any) -> dict
         if other_deployed is not None and other_deployed == 0:
             warning = (
                 f"Only '{model_type}' is deployed. "
-                f"Deploy a '{other_model}' run too so the ensemble averages both models."
+                f"Deploy the matching '{other_model}' run from the same training instance "
+                f"({run_yearmonth}) so the ensemble averages both models correctly."
             )
 
     response: dict[str, Any] = {
@@ -318,6 +352,100 @@ async def redeploy_ml_run(
     result = await _do_deploy(run_id, run, current_admin.email, svc)
     result["message"] = "Model redeployed successfully"
     return result
+
+
+@router.post("/ml/deploy-bundle/{run_yearmonth}", status_code=200)
+async def deploy_bundle(
+    run_yearmonth: str,
+    current_admin: Annotated[User, Depends(get_current_admin_user)],
+) -> dict[str, Any]:
+    """
+    Deploy BOTH models (prophet + lstm) from a single training instance together.
+
+    This is the correct way to deploy — both models share one metrics.json and
+    feed a single ensemble, so they must always be deployed as a unit from the
+    same run_yearmonth.
+
+    Accepts runs in either 'awaiting_review' or 'superseded' status.
+    Deploys each model in turn (bypassing the per-model bundle mismatch guard,
+    since deploying the whole bundle is what keeps them consistent).
+    """
+    svc = get_supabase_service()
+
+    # Fetch both runs for this training instance
+    try:
+        pool = await svc._get_pool_direct()
+        rows = await pool.fetch(
+            "SELECT run_id, model_type, status FROM ml_training_runs "
+            "WHERE run_yearmonth = $1 AND model_type IN ('prophet', 'lstm') "
+            "AND status IN ('awaiting_review', 'superseded', 'deployed')",
+            run_yearmonth,
+        )
+    except Exception as exc:
+        logger.error("deploy_bundle fetch error: %s", exc)
+        raise HTTPException(status_code=502, detail=f"Could not fetch training runs: {exc}")
+
+    if not rows:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No deployable runs found for training instance '{run_yearmonth}'.",
+        )
+
+    # Only act on runs that are not already deployed
+    to_deploy = [dict(r) for r in rows if r["status"] in ("awaiting_review", "superseded")]
+    if not to_deploy:
+        return {
+            "message": f"Bundle '{run_yearmonth}' is already fully deployed.",
+            "run_yearmonth": run_yearmonth,
+            "deployed_runs": [],
+        }
+
+    deployed_runs: list[str] = []
+    now = datetime.now(timezone.utc)
+    admin_email = current_admin.email
+
+    for r in to_deploy:
+        run_id     = r["run_id"]
+        model_type = r["model_type"]
+        full_run   = await svc.get_ml_training_run(run_id)
+        if not full_run:
+            continue
+
+        staging_key = full_run.get("staging_pkl_key", "")
+        if not staging_key:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Run '{run_id}' has no staging forecast CSV — cannot deploy bundle.",
+            )
+
+        # Copy artifacts to production (skips the per-model mismatch guard)
+        try:
+            await asyncio.to_thread(_deploy_to_production_sync, staging_key)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=502, detail=str(exc))
+
+        # Update DB status + supersede the previous run of this model_type
+        try:
+            await svc.update_ml_training_run_status(
+                run_id, status="deployed", deployed_at=now, deployed_by=admin_email,
+            )
+            await svc.supersede_other_runs(run_id, model_type)
+        except Exception as exc:
+            logger.error("deploy_bundle status update error: %s", exc)
+            raise HTTPException(status_code=502, detail=str(exc))
+
+        deployed_runs.append(run_id)
+
+    logger.info(
+        "Admin %s deployed bundle %s (%d models)", admin_email, run_yearmonth, len(deployed_runs)
+    )
+    return {
+        "message": f"Deployed bundle '{run_yearmonth}' ({len(deployed_runs)} models)",
+        "run_yearmonth": run_yearmonth,
+        "deployed_by": admin_email,
+        "deployed_at": now.isoformat(),
+        "deployed_runs": deployed_runs,
+    }
 
 
 # ---------------------------------------------------------------------------
