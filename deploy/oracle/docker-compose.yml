@@ -1,0 +1,89 @@
+# Oracle Always Free VM — production stack
+# External: Supabase Postgres, Upstash Redis, Mailgun, LLM APIs
+# Usage (on the VM, from Backend repo root or this folder — see setup.sh):
+#   docker compose -f deploy/oracle/docker-compose.yml --env-file .env up -d --build
+
+services:
+  caddy:
+    image: caddy:2.8-alpine
+    container_name: venturescope-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - venturescope
+
+  backend:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    image: venturescope-api:local
+    container_name: venturescope-api
+    restart: unless-stopped
+    env_file:
+      - ../../.env
+    environment:
+      ENVIRONMENT: production
+      DEBUG: "false"
+    # API only reachable via Caddy on the Docker network
+    expose:
+      - "8000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+    networks:
+      - venturescope
+
+  worker:
+    build:
+      context: ../..
+      dockerfile: Dockerfile.worker
+    image: venturescope-worker:local
+    container_name: venturescope-worker
+    restart: unless-stopped
+    env_file:
+      - ../../.env
+    environment:
+      ENVIRONMENT: production
+      DEBUG: "false"
+    # concurrency=1 is safer on free-tier RAM; raise later if needed
+    command:
+      [
+        "celery",
+        "-A",
+        "app.celery_config.celery_app",
+        "worker",
+        "--loglevel=info",
+        "--concurrency=1",
+      ]
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - venturescope
+
+networks:
+  venturescope:
+    name: venturescope-network
+
+volumes:
+  caddy_data:
+  caddy_config:

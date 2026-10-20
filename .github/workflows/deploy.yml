@@ -1,98 +1,33 @@
-name: Deploy to Azure Container Apps
+name: Deploy to AWS EC2
+
+# Builds happen ON the EC2 host. This workflow SSHes in and runs deploy/aws/deploy.sh.
+# Required secrets:
+#   AWS_EC2_HOST         — public IP or Elastic IP of the instance
+#   AWS_EC2_USER         — SSH user (ubuntu)
+#   AWS_EC2_SSH_KEY       — private key (PEM)
+#   AWS_EC2_DEPLOY_PATH   — absolute path to Backend on the instance
+#                          e.g. /opt/venturescope/Backend
 
 on:
   push:
     branches: [master-v2]
+  workflow_dispatch:
 
 jobs:
-  build-and-deploy:
+  deploy:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-      id-token: write
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1.2.0
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract metadata for API image
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/venturescope/backend
-          tags: |
-            type=ref,event=branch
-            type=sha,prefix=
-            type=raw,value=latest
-
-      - name: Extract metadata for Worker image
-        id: meta-worker
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/venturescope/backend-worker
-          tags: |
-            type=ref,event=branch
-            type=sha,prefix=
-            type=raw,value=latest
-
-      - name: Build and push API image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ./Dockerfile
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Build and push Worker image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ./Dockerfile.worker
-          push: true
-          tags: ${{ steps.meta-worker.outputs.tags }}
-          labels: ${{ steps.meta-worker.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      # Compute a unique revision suffix: 8 chars of SHA + run_attempt number.
-      # - Azure revision names must be ≤10 alphanumeric chars
-      # - run_attempt (1, 2, 3...) ensures retries never collide with existing revisions
-      # - e.g. first run: "7821fa751", retry: "7821fa752", next commit: "a3b4c5d61"
-      - name: Set revision suffix
-        id: rev
-        run: echo "suffix=$(echo ${{ github.sha }} | cut -c1-8)${{ github.run_attempt }}" >> $GITHUB_OUTPUT
-
-      - name: Azure Login
-        uses: azure/login@v1
-        with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
-
-      - name: Deploy API to Azure Container Apps
-        run: |
-          az containerapp update \
-            --name venturescope \
-            --resource-group ${{ secrets.AZURE_RG }} \
-            --image ghcr.io/venturescope/backend:${{ steps.meta.outputs.version }} \
-            --revision-suffix ${{ steps.rev.outputs.suffix }}
-
-      - name: Deploy Worker to Azure Container Apps
-        run: |
-          az containerapp update \
-            --name backgroundworker \
-            --resource-group ${{ secrets.AZURE_RG }} \
-            --image ghcr.io/venturescope/backend-worker:${{ steps.meta-worker.outputs.version }} \
-            --revision-suffix ${{ steps.rev.outputs.suffix }}
+          host: ${{ secrets.AWS_EC2_HOST }}
+          username: ${{ secrets.AWS_EC2_USER }}
+          key: ${{ secrets.AWS_EC2_SSH_KEY }}
+          script_stop: true
+          script: |
+            set -euo pipefail
+            cd "${{ secrets.AWS_EC2_DEPLOY_PATH }}"
+            git fetch origin master-v2
+            git checkout master-v2
+            git pull --ff-only origin master-v2
+            bash deploy/aws/deploy.sh

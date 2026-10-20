@@ -1,0 +1,7 @@
+# VentureScope API — TLS termination for Oracle Always Free VM
+# Replace the hostname only if you use a different API domain.
+
+api.venturescope.tech {
+	encode gzip
+	reverse_proxy backend:8000
+}

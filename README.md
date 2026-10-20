@@ -41,7 +41,7 @@ AI-powered career guidance platform built with FastAPI. Helps students and profe
 | Email | Mailgun |
 | Auth | JWT + bcrypt + TOTP MFA |
 | OAuth | Google + GitHub |
-| Deployment | Azure Container Apps via GitHub Actions |
+| Deployment | AWS EC2 Free plan (Docker Compose + Caddy) via GitHub Actions SSH |
 
 ### 1. Install dependencies
 
@@ -445,37 +445,29 @@ These embeddings power semantic job matching and the RAG chatbot retrieval.
 
 ## Deployment
 
-Deploys automatically to **Azure Container Apps** on every push to `master-v2` via GitHub Actions.
+**Production (current):** AWS EC2 Free plan + Caddy + Docker Compose. Guide: [`docs/deployment/AWS_FREE_TIER.md`](docs/deployment/AWS_FREE_TIER.md).
 
-### What the pipeline does
-
-1. Builds and pushes the **API image** (`Dockerfile`) to GitHub Container Registry
-2. Builds and pushes the **Worker image** (`Dockerfile.worker`) to GitHub Container Registry
-3. Updates the `venturescope` Container App with the new API image
-4. Updates the `backgroundworker` Container App with the new worker image
+On each push to `master-v2`, GitHub Actions SSHes into the EC2 host, pulls, and runs `deploy/aws/deploy.sh`.
 
 ### Required GitHub Secrets
 
 | Secret | Value |
 |---|---|
-| `AZURE_CREDENTIALS` | Azure service principal JSON |
-| `AZURE_RG` | Azure resource group name |
+| `AWS_EC2_HOST` | EC2 public IP or Elastic IP |
+| `AWS_EC2_USER` | SSH user (`ubuntu`) |
+| `AWS_EC2_SSH_KEY` | Private key PEM |
+| `AWS_EC2_DEPLOY_PATH` | Absolute path to Backend (e.g. `/opt/venturescope/Backend`) |
 
-### Update environment variables on Azure
+### Manual deploy on the EC2 host
 
 ```bash
-# API container
-az containerapp update \
-  --name venturescope \
-  --resource-group <AZURE_RG> \
-  --set-env-vars KEY="value" KEY2="value2"
-
-# Worker container
-az containerapp update \
-  --name backgroundworker \
-  --resource-group <AZURE_RG> \
-  --set-env-vars KEY="value" KEY2="value2"
+cd /opt/venturescope/Backend
+cp .env.production.example .env   # first time — fill secrets
+bash deploy/aws/setup.sh          # first time — Docker + UFW
+bash deploy/aws/deploy.sh
 ```
+
+Oracle Always Free is a fallback only if you have a real (non-virtual) card: [`docs/deployment/ORACLE_FREE_TIER.md`](docs/deployment/ORACLE_FREE_TIER.md).
 
 ---
 

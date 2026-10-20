@@ -1,5 +1,9 @@
-# Production deployment for VM (uses external Supabase PostgreSQL + Render Redis)
-# All configuration comes from .env file
+# Legacy VM compose (API + worker only, no TLS proxy).
+# Preferred production path (AWS EC2 Free plan):
+#   deploy/aws/docker-compose.yml  (+ Caddy)
+# See docs/deployment/AWS_FREE_TIER.md
+#
+# All configuration comes from .env (external Supabase + Upstash Redis).
 
 services:
   backend:
@@ -16,9 +20,6 @@ services:
       sh -c "
         echo 'Waiting for external services...' &&
         sleep 5 &&
-        echo 'Running database migrations...' &&
-        python -c 'import asyncio; from app.core.database import engine; asyncio.run(engine.dispose())' ||
-        echo 'Skipping migrations (DB already migrated)' &&
         echo 'Starting API server...' &&
         uvicorn app.main:app --host 0.0.0.0 --port 8000
       "
@@ -31,6 +32,15 @@ services:
       - .env
     container_name: venturescope-worker
     restart: unless-stopped
+    command:
+      [
+        "celery",
+        "-A",
+        "app.celery_config.celery_app",
+        "worker",
+        "--loglevel=info",
+        "--concurrency=1",
+      ]
 
 networks:
   default:

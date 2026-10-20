@@ -1,5 +1,10 @@
 # VentureScope Backend — Deployment & CI/CD Guide
 
+> **Current production path (2026):** **AWS EC2 Free plan** + Caddy + Docker Compose.  
+> Follow **[AWS_FREE_TIER.md](./AWS_FREE_TIER.md)** end-to-end. Scripts: `deploy/aws/`.  
+> Oracle Always Free: [ORACLE_FREE_TIER.md](./ORACLE_FREE_TIER.md) (fallback if real card).  
+> Azure Container Apps below is **legacy**.
+
 ## Table of Contents
 
 1. [Architecture Overview](#architecture-overview)
@@ -7,10 +12,10 @@
 3. [Environment Variables Reference](#environment-variables-reference)
 4. [CI/CD Pipeline](#cicd-pipeline)
 5. [Docker Images](#docker-images)
-6. [Azure Container Apps](#azure-container-apps)
+6. [Azure Container Apps](#azure-container-apps) (legacy)
 7. [Database Migrations](#database-migrations)
 8. [Manual Deployment](#manual-deployment)
-9. [Updating Environment Variables on Azure](#updating-environment-variables-on-azure)
+9. [Updating Environment Variables on Azure](#updating-environment-variables-on-azure) (legacy)
 10. [Monitoring & Logs](#monitoring--logs)
 11. [Troubleshooting](#troubleshooting)
 12. [Local Development](#local-development)
@@ -18,6 +23,30 @@
 ---
 
 ## Architecture Overview
+
+**Active (AWS EC2 Free plan):**
+
+```
+GitHub (master-v2)
+    │
+    ▼ push triggers
+GitHub Actions → SSH → EC2
+    │
+    docker compose build/up (on the instance)
+    │
+    ┌─────────┼─────────┐
+    ▼         ▼         ▼
+  Caddy     API      Celery worker
+  :443      :8000
+    │
+    ├── Supabase PostgreSQL + Storage
+    ├── Upstash Redis (OTP + Celery)
+    └── Mailgun / LLM / Serper
+```
+
+Compose: `deploy/aws/docker-compose.yml` — see [AWS_FREE_TIER.md](./AWS_FREE_TIER.md).
+
+**Legacy (Azure — retired):**
 
 ```
 GitHub (master-v2)
@@ -33,15 +62,6 @@ GitHub Actions CI/CD
                               ▼                       ▼
                   Azure Container App         Azure Container App
                    (venturescope)            (backgroundworker)
-                   API Server                Celery Worker
-                   Port 8000                 Background tasks
-                              │
-                    ┌─────────┼─────────┐
-                    ▼         ▼         ▼
-               Supabase    Upstash    Supabase
-               PostgreSQL  Redis      Storage
-               (main DB)   (OTP/      (files)
-                            Celery)
 ```
 
 ---
